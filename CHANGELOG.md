@@ -11,3 +11,5 @@
 - `driftr untrack` narrows the scope; `track` and `untrack` take several paths.
 - `@` names the latest snapshot and `@~N` older ones, wherever an id is taken.
 - The hook also snapshots the tracked repo of the file a tool is editing, so `PreToolUse`/`PostToolUse` on `Write|Edit` catch edits outside the session's cwd.
+- `driftr gc` rewrites snapshot history to the current scope, e.g. after `untrack`, and prunes the purged content from driftr-owned stores.
+- `track dir/` with a trailing slash means a directory even before it exists.

@@ -18,6 +18,7 @@ driftr log [path] [--session id]          # snapshots, newest first
 driftr diff <id> [path]                   # snapshot vs. the current in-scope files
 driftr restore <path> --at <id> [--dry-run]   # snapshots what it overwrites first
 driftr watch [--idle 30] [--max 300]      # poll; snapshot when the tree settles
+driftr gc [--dry-run]                     # rewrite history to the current scope
 ```
 
 Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it.
@@ -47,6 +48,8 @@ Patterns match repo-relative paths. Globs are gitignore-like (`*` stays within a
 driftr untrack '**/*.md'
 driftr track CLAUDE.md skills docs
 ```
+
+Narrowing the scope doesn't touch history already taken. `driftr gc` rewrites the snapshot chain to the current scope, keeping messages, dates and session trailers and dropping snapshots left with nothing to record. In a driftr-owned store (below) the purged content is deleted immediately; in your own repo, git's normal two-week expiry applies, so your own unreachable objects are never pruned early.
 
 ## Directories that aren't git repos
 

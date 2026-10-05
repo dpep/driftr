@@ -11,6 +11,7 @@ pub struct Git {
     index: Option<PathBuf>,
     /// Explicit (git dir, work tree), for a directory whose repo lives elsewhere.
     repo: Option<(PathBuf, PathBuf)>,
+    env: Vec<(String, String)>,
 }
 
 impl Git {
@@ -19,7 +20,15 @@ impl Git {
             dir: dir.to_path_buf(),
             index: None,
             repo: None,
+            env: vec![],
         }
+    }
+
+    /// Same repo, with an extra environment variable on every command.
+    pub fn with_env(&self, key: &str, value: &str) -> Git {
+        let mut git = self.clone();
+        git.env.push((key.into(), value.into()));
+        git
     }
 
     /// Same repo, but staging into a private index so the user's is never touched.
@@ -90,6 +99,7 @@ impl Git {
         if let Some(index) = &self.index {
             cmd.env("GIT_INDEX_FILE", index);
         }
+        cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         cmd
     }
 

@@ -86,6 +86,12 @@ enum Command {
         #[arg(long, default_value_t = 300)]
         max: u64,
     },
+    /// Rewrite snapshot history to the current scope, dropping files no longer tracked
+    Gc {
+        /// Report what would be removed, and change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Claude Code hook: reads the hook JSON on stdin and snapshots in opted-in repos
     Hook,
 }
@@ -203,6 +209,25 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
                 }
                 thread::sleep(Duration::from_secs(idle));
             }
+        }
+        Command::Gc { dry_run } => {
+            let report = repo.gc(dry_run)?;
+            fmt.one(&report, |r| {
+                let verb = if r.dry_run { "would keep" } else { "kept" };
+                let mut text = format!(
+                    "{verb} {} of {} snapshots; {} paths {}removed from history",
+                    r.kept,
+                    r.snapshots,
+                    r.removed_paths.len(),
+                    if r.dry_run { "would be " } else { "" }
+                );
+                if r.dry_run {
+                    for p in &r.removed_paths {
+                        text.push_str(&format!("\n  {p}"));
+                    }
+                }
+                Some(text)
+            })?;
         }
         Command::Hook => unreachable!("handled before opening a repo"),
     }

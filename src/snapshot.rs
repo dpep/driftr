@@ -49,13 +49,15 @@ pub struct Entry {
 
 pub struct Repo {
     /// Runs from the caller's directory, so user-supplied paths resolve as typed.
-    git: Git,
+    pub(crate) git: Git,
     /// Runs from the worktree root, where scope patterns are anchored.
     root: Git,
     top: PathBuf,
     git_dir: PathBuf,
+    /// Backed by a driftr-owned store rather than the user's repo.
+    external: bool,
     /// Per-worktree.
-    index: PathBuf,
+    pub(crate) index: PathBuf,
     /// Shared by all worktrees of a repo.
     shared: PathBuf,
     snapshot_ref: String,
@@ -70,7 +72,9 @@ impl Repo {
         }
         if let Some((top, store)) = external::find(dir)? {
             let git = git.with_repo(&store, &top);
-            return Repo::locate(&git)?.context("external store is unreadable");
+            let mut repo = Repo::locate(&git)?.context("external store is unreadable")?;
+            repo.external = true;
+            return Ok(repo);
         }
         bail!("not in a git repository or a directory driftr tracks (`driftr init` tracks one)")
     }
@@ -112,10 +116,16 @@ impl Repo {
             root: git.at(Path::new(top)),
             top: top.into(),
             git_dir: git_dir.into(),
+            external: false,
             index: Path::new(git_dir).join("driftr").join("index"),
             shared: Path::new(common).join("driftr"),
             git: git.clone(),
         }))
+    }
+
+    /// True for a plain directory tracked through a driftr-owned store.
+    pub fn is_external(&self) -> bool {
+        self.external
     }
 
     /// Where the snapshots are stored: `.git`, or an external store.
@@ -198,9 +208,11 @@ impl Repo {
     fn pattern_for(&self, path: &str) -> Result<String> {
         let prefix = self.git.run(&["rev-parse", "--show-prefix"])?;
         let rel = format!("{prefix}{}", path.trim_start_matches("./"));
+        // A trailing slash says "directory" even before it exists.
+        let dir_hint = rel.ends_with('/');
         let rel = rel.trim_end_matches('/');
         let mut pattern = globset::escape(rel);
-        if self.top.join(rel).is_dir() {
+        if dir_hint || self.top.join(rel).is_dir() {
             pattern.push_str("/**");
         }
         Ok(pattern)
@@ -235,6 +247,18 @@ impl Repo {
 
     /// Writes the in-scope files to a tree object and returns its id.
     pub fn stage(&self) -> Result<String> {
+        match self.stage_once() {
+            // A prune can drop blobs only the private index referenced; the stat cache would
+            // then skip rehashing them. The index is just a cache, so rebuild it.
+            Err(e) if format!("{e:#}").contains("invalid object") => {
+                fs::remove_file(&self.index)?;
+                self.stage_once()
+            }
+            result => result,
+        }
+    }
+
+    fn stage_once(&self) -> Result<String> {
         fs::create_dir_all(self.index.parent().unwrap())?;
         let git = self.root.with_index(&self.index);
         let files = self.files()?;
@@ -248,7 +272,12 @@ impl Repo {
 
         // The index persists between runs, so unchanged files aren't rehashed.
         if !stale.is_empty() {
-            git.run_input(&pathspec_cmd(&["rm", "--cached", "-q"]), &nul_join(&stale))?;
+            // -f: only the private index changes, and git's "staged content differs" guard
+            // protects a user's staging, which this isn't.
+            git.run_input(
+                &pathspec_cmd(&["rm", "--cached", "-f", "-q"]),
+                &nul_join(&stale),
+            )?;
         }
         if !files.is_empty() {
             git.run_input(&pathspec_cmd(&["add"]), &nul_join(&files))?;
@@ -466,14 +495,14 @@ impl Repo {
 }
 
 /// Paths go on stdin, NUL-separated and literal, so odd filenames can't be read as globs.
-fn pathspec_cmd<'a>(cmd: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn pathspec_cmd<'a>(cmd: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec!["--literal-pathspecs"];
     args.extend(cmd);
     args.extend(["--pathspec-from-file=-", "--pathspec-file-nul"]);
     args
 }
 
-fn nul_join<S: AsRef<str>>(paths: &[S]) -> Vec<u8> {
+pub(crate) fn nul_join<S: AsRef<str>>(paths: &[S]) -> Vec<u8> {
     let mut out = vec![];
     for p in paths {
         out.extend(p.as_ref().as_bytes());

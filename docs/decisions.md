@@ -52,6 +52,14 @@ Measured on `~/.claude` (342 files in scope, plus large transcript and plugin-ca
 
 Sessions rarely run inside `~/.claude`, but they edit it constantly. So the hook snapshots the cwd repo *and* the opted-in repo containing the tool's `file_path` (its nearest existing directory, since a `PreToolUse` Write may target a path not yet created), deduplicated. Wired on `PreToolUse`/`PostToolUse` for file-writing tools, each edit is bracketed: before (including anything else that changed since) and after.
 
+## gc rewrites to the current scope; it prunes only what driftr owns
+
+Narrowing the scope left binaries and synced files in old snapshots (7.0 MB for `~/.claude`). `gc` replays the chain through a scratch index with out-of-scope paths removed. It keeps messages, dates and trailers, drops snapshots that end up empty, and swaps the ref with compare-and-swap, so a hook snapshot landing mid-rewrite aborts the gc rather than being lost. On `~/.claude`: 16 snapshots became 14, 246 paths were removed, and the store went from 7.0 MB to 372 KB.
+
+Only driftr's ref and reflog are expired. `git gc --prune=now` runs only in external stores: in the user's repo it would also delete their own unreachable objects (dropped stashes, abandoned commits), so there git's normal expiry decides.
+
+Two bugs it surfaced: `rm --cached` refuses entries that differ from both file and HEAD, which only guards a *user's* staging, so driftr's private-index removals use `-f`. And a prune can delete blobs only the private index references, after which the stat cache skips rehashing them, so staging rebuilds the index once on "invalid object".
+
 ## Open
 
 - A removed worktree leaves its ref behind, keeping its objects alive. That needs a `driftr gc` eventually.
@@ -59,3 +67,6 @@ Sessions rarely run inside `~/.claude`, but they edit it constantly. So the hook
 - Snapshot ref growth and pruning policy are unmeasured.
 - Edits made through shell commands aren't bracketed: they land in the next snapshot, tagged with whatever event took it. `Bash` on `PostToolUse` would fix attribution at ~40–140 ms per command.
 - Multi-file subjects always say "Update", even when most files were added (e.g. newly in scope).
+- `gc` keeps subjects verbatim, so generated ones that count files go stale ("Start tracking 342 files" now holds 96). Regenerating generated subjects needs a marker for which ones were explicit.
+- Concurrent sessions share one private index per worktree; a lock collision fails one hook's snapshot (swallowed). Unmeasured so far.
+- Finding why a file is in scope (or what's bloating it) took manual surveying; `files --why` and a size/churn view would have surfaced `skills/synced` and `bin/` immediately.

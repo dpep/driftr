@@ -469,3 +469,77 @@ fn at_names_the_latest_snapshot_and_its_ancestors() {
     repo.restore("@~1", "README.md").unwrap();
     assert_eq!(read(tmp.path(), "README.md"), "v2\n");
 }
+
+#[test]
+fn gc_rewrites_history_to_the_current_scope() {
+    let (tmp, repo) = repo();
+    assert_eq!(
+        repo.track("bin/").unwrap(),
+        "bin/**",
+        "dir before it exists"
+    );
+    write(tmp.path(), "bin/tool", "binary\n");
+    write(tmp.path(), "bin/script", "#!/bin/sh\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "bin/tool", "binary v2\n");
+    snap(&repo).unwrap(); // only touches bin/tool: empty once it's out of scope
+    write(tmp.path(), "README.md", "v2\n");
+    repo.snapshot(&SnapshotOpts::session("s1")).unwrap();
+    let before = repo.log(None, None).unwrap();
+
+    repo.untrack("bin").unwrap();
+    repo.track("bin/script").unwrap();
+
+    let dry = repo.gc(true).unwrap();
+    assert_eq!((dry.snapshots, dry.kept), (3, 2));
+    assert_eq!(dry.removed_paths, ["bin/tool"]);
+    assert_eq!(
+        repo.log(None, None).unwrap(),
+        before,
+        "dry run changed history"
+    );
+
+    let report = repo.gc(false).unwrap();
+    assert!(!report.pruned, "never prune-now in the user's own repo");
+    let after = repo.log(None, None).unwrap();
+    let subjects: Vec<&str> = after.iter().map(|e| e.subject.as_str()).collect();
+    assert_eq!(subjects, ["Update README.md", "Start tracking 3 files"]);
+    assert_eq!(after[0].time, before[0].time);
+
+    let tip = repo.last().unwrap().unwrap();
+    assert_eq!(tree_files(tmp.path(), &tip), ["README.md", "bin/script"]);
+    let body = git(tmp.path(), &["log", "-1", "--format=%B", &tip]);
+    assert!(body.contains("Driftr-Session: s1"), "{body}");
+    assert!(
+        !git(tmp.path(), &["log", "--format=%H", "--all"]).is_empty(),
+        "user history intact"
+    );
+}
+
+#[test]
+fn staging_recovers_when_a_prune_removed_blobs_the_index_cached() {
+    let (tmp, repo) = repo();
+    snap(&repo).unwrap();
+    write(tmp.path(), "draft.md", "never snapshotted\n");
+    repo.stage().unwrap(); // blob now referenced only by driftr's private index
+    git(tmp.path(), &["gc", "-q", "--prune=now"]);
+
+    let id = snap(&repo).unwrap();
+    assert_eq!(
+        git(tmp.path(), &["show", &format!("{id}:draft.md")]),
+        "never snapshotted"
+    );
+}
+
+#[test]
+fn excluding_a_modified_tracked_file_still_snapshots() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "README.md", "v2\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "README.md", "v3\n"); // index now differs from both file and HEAD
+    write(tmp.path(), "other.md", "o\n");
+    repo.untrack("README.md").unwrap();
+
+    let id = snap(&repo).unwrap();
+    assert_eq!(tree_files(tmp.path(), &id), ["other.md"]);
+}

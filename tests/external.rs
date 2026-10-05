@@ -174,3 +174,29 @@ fn rejects_a_relative_data_dir() {
     assert_eq!(run.code, 2);
     assert!(run.stderr.contains("must be absolute"), "{}", run.stderr);
 }
+
+#[test]
+fn gc_purges_untracked_content_from_an_external_store() {
+    let env = Env::new();
+    write(&env.work, "bin/blob", "big binary\n");
+    env.run(&env.work, &["init"]);
+    env.run(&env.work, &["track", "bin/"]);
+    env.run(&env.work, &["snapshot"]);
+    let store = env.json(&env.work, &["status", "-j"])["store"]
+        .as_str()
+        .unwrap()
+        .replace('~', env.home.to_str().unwrap());
+    let blob = git(&env.work, &["hash-object", "bin/blob"]);
+
+    env.run(&env.work, &["untrack", "bin/"]);
+    let report = env.json(&env.work, &["gc", "-j"]);
+    assert_eq!(report["pruned"], true);
+    assert_eq!(report["removed_paths"], serde_json::json!(["bin/blob"]));
+
+    let gone = std::process::Command::new("git")
+        .args(["--git-dir", &store, "cat-file", "-e", &blob])
+        .status()
+        .unwrap();
+    assert!(!gone.success(), "blob still in the store");
+    assert_eq!(env.run(&env.work, &["log"]).stdout.lines().count(), 1);
+}
