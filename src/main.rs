@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
@@ -10,7 +10,7 @@ use serde_json::json;
 
 use driftr::output::Format;
 use driftr::watch::Settle;
-use driftr::{Repo, SnapshotOpts, Untrack, hook, status};
+use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, status, usage};
 
 const EXIT_CODES: &str = "\
 Exit codes:
@@ -29,6 +29,9 @@ struct Cli {
     /// One compact JSON object per line
     #[arg(short = 'J', long, global = true, conflicts_with = "json")]
     ndjson: bool,
+    /// Print where the time went (per git command and phase) to stderr
+    #[arg(long, global = true)]
+    profile: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -97,6 +100,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    let start = Instant::now();
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(e) => {
@@ -110,9 +114,9 @@ fn main() -> ExitCode {
         _ => Format::Text,
     };
     if let Command::Hook = cli.command {
-        return run_hook();
+        return run_hook(start, cli.profile);
     }
-    match run(cli.command, fmt) {
+    let code = match run(cli.command, fmt) {
         Ok(code) => code,
         Err(e) => {
             match fmt {
@@ -121,7 +125,11 @@ fn main() -> ExitCode {
             }
             ExitCode::from(2)
         }
+    };
+    if cli.profile {
+        eprint!("{}", profile::summary(start.elapsed()).render());
     }
+    code
 }
 
 fn run(command: Command, fmt: Format) -> Result<ExitCode> {
@@ -201,12 +209,15 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
             let idle = idle.max(1);
             let mut settle = Settle::new((max / idle) as u32);
             loop {
+                // Held across stage + commit so a concurrent writer can't land in between.
+                let lock = repo.lock()?;
                 let tree = repo.stage()?;
                 if settle.observe(tree.clone())
                     && let Some(id) = repo.commit(&tree, &SnapshotOpts::default())?
                 {
                     fmt.one(&json!({ "snapshot": id }), |_| Some(id.clone()))?;
                 }
+                drop(lock);
                 thread::sleep(Duration::from_secs(idle));
             }
         }
@@ -271,8 +282,9 @@ fn status_text(s: &status::Status) -> String {
 }
 
 /// Always exits 0 and never writes stdout: Claude Code parses hook stdout, and a
-/// failing hook must not block or interrupt the agent.
-fn run_hook() -> ExitCode {
+/// failing hook must not block or interrupt the agent. Every run is logged with its
+/// timings, so what hooks cost and catch can be judged from real use (`driftr report`).
+fn run_hook(start: Instant, show_profile: bool) -> ExitCode {
     let result = (|| {
         if std::io::stdin().is_terminal() {
             bail!("expects Claude Code's hook JSON on stdin");
@@ -281,8 +293,29 @@ fn run_hook() -> ExitCode {
         std::io::stdin().read_to_string(&mut input)?;
         hook::run(&input)
     })();
-    if let Err(e) = result {
-        eprintln!("driftr hook: {e:#}");
+    let profile = profile::summary(start.elapsed());
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut record =
+        json!({ "time": time, "version": env!("CARGO_PKG_VERSION"), "profile": profile });
+    match &result {
+        Ok(outcome) => {
+            record["event"] = json!(outcome.event);
+            record["tool"] = json!(outcome.tool);
+            record["session"] = json!(outcome.session);
+            record["visits"] = json!(outcome.visits);
+        }
+        Err(e) => {
+            eprintln!("driftr hook: {e:#}");
+            record["error"] = json!(format!("{e:#}"));
+        }
+    }
+    if let Err(e) = usage::append(&record) {
+        eprintln!("driftr hook: usage log: {e:#}");
+    }
+    if show_profile {
+        eprint!("{}", profile.render());
     }
     ExitCode::SUCCESS
 }

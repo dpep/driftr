@@ -324,6 +324,7 @@ fn hook_ignores_repos_that_have_not_opted_in() {
     assert!(
         driftr::hook::run(&hook_input(tmp.path(), "Stop"))
             .unwrap()
+            .snapshots()
             .is_empty()
     );
     assert_eq!(repo.last().unwrap(), None);
@@ -335,6 +336,7 @@ fn hook_ignores_directories_outside_git() {
     assert!(
         driftr::hook::run(&hook_input(tmp.path(), "Stop"))
             .unwrap()
+            .snapshots()
             .is_empty()
     );
 }
@@ -345,7 +347,10 @@ fn hook_snapshots_with_session_and_records_the_event() {
     repo.init().unwrap();
     write(tmp.path(), "a.md", "1\n");
 
-    let [id] = &driftr::hook::run(&hook_input(tmp.path(), "Stop")).unwrap()[..] else {
+    let [id] = &driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+        .unwrap()
+        .snapshots()[..]
+    else {
         panic!("expected one snapshot");
     };
     let body = git(tmp.path(), &["log", "-1", "--format=%B", id]);
@@ -374,7 +379,7 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
         "tool_name": "Write",
         "tool_input": {"file_path": tmp.path().join("skills/new.md")},
     });
-    let taken = driftr::hook::run(&payload.to_string()).unwrap();
+    let taken = driftr::hook::run(&payload.to_string()).unwrap().snapshots();
     assert_eq!(taken.len(), 1);
     assert_eq!(repo.last().unwrap().as_ref(), taken.first());
 
@@ -385,7 +390,13 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
         "cwd": tmp.path(),
         "tool_input": {"file_path": tmp.path().join("skills/new.md")},
     });
-    assert_eq!(driftr::hook::run(&same.to_string()).unwrap().len(), 1);
+    assert_eq!(
+        driftr::hook::run(&same.to_string())
+            .unwrap()
+            .snapshots()
+            .len(),
+        1
+    );
 
     // Before a Write creates a file in a new directory, its nearest existing ancestor counts.
     let pre = serde_json::json!({
@@ -394,7 +405,13 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
         "tool_input": {"file_path": tmp.path().join("brand/new/dir/x.md")},
     });
     write(tmp.path(), "skills/new.md", "again\n");
-    assert_eq!(driftr::hook::run(&pre.to_string()).unwrap().len(), 1);
+    assert_eq!(
+        driftr::hook::run(&pre.to_string())
+            .unwrap()
+            .snapshots()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -521,8 +538,29 @@ fn staging_recovers_when_a_prune_removed_blobs_the_index_cached() {
     let (tmp, repo) = repo();
     snap(&repo).unwrap();
     write(tmp.path(), "draft.md", "never snapshotted\n");
-    repo.stage().unwrap(); // blob now referenced only by driftr's private index
+    // Backdated, so git trusts its stat and tree caches instead of (sometimes) rehashing:
+    // the hazard is deterministic rather than timing-dependent.
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    for f in ["draft.md", "README.md"] {
+        fs::File::options()
+            .write(true)
+            .open(tmp.path().join(f))
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+    }
+    let staged = repo.stage().unwrap(); // its tree and blob are referenced only by the index
     git(tmp.path(), &["gc", "-q", "--prune=now"]);
+    assert!(
+        fs::metadata(
+            tmp.path()
+                .join(".git/objects")
+                .join(&staged[..2])
+                .join(&staged[2..])
+        )
+        .is_err(),
+        "the staged tree should have been pruned"
+    );
 
     let id = snap(&repo).unwrap();
     assert_eq!(

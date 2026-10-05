@@ -2,7 +2,26 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use std::time::Instant;
+
 use anyhow::{Context, Result, bail};
+
+use crate::profile;
+
+/// `git <subcommand>`, skipping leading global options like `-c k=v` and `--literal-pathspecs`.
+fn span_name(args: &[&str]) -> String {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match *arg {
+            "-c" => {
+                iter.next();
+            }
+            a if a.starts_with('-') => {}
+            a => return format!("git {a}"),
+        }
+    }
+    "git".into()
+}
 
 /// Thin wrapper over the git CLI, run from a fixed directory.
 #[derive(Clone, Debug)]
@@ -78,12 +97,18 @@ impl Git {
             .stderr(Stdio::piped())
             .spawn()
             .context("failed to run git")?;
+        let start = Instant::now();
         child.stdin.take().unwrap().write_all(input)?;
-        Self::check(args, child.wait_with_output()?)
+        let out = child.wait_with_output()?;
+        profile::record(&span_name(args), start.elapsed());
+        Self::check(args, out)
     }
 
     fn output(&self, args: &[&str]) -> Result<Output> {
-        self.command(args).output().context("failed to run git")
+        let start = Instant::now();
+        let out = self.command(args).output().context("failed to run git");
+        profile::record(&span_name(args), start.elapsed());
+        out
     }
 
     fn command(&self, args: &[&str]) -> Command {

@@ -40,9 +40,12 @@ impl Config {
         toml::from_str(&text).with_context(|| format!("invalid config: {}", path.display()))
     }
 
+    /// Write-then-rename, so a concurrent reader never sees a half-written config.
     pub fn save(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, toml::to_string(self)?)?;
+        let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+        fs::write(&tmp, toml::to_string(self)?)?;
+        fs::rename(tmp, path)?;
         Ok(())
     }
 }

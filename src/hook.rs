@@ -1,10 +1,10 @@
 //! Claude Code hook entry point: snapshot at agent turn boundaries, tagged with the session.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::snapshot::{Repo, SnapshotOpts};
@@ -20,10 +20,37 @@ pub struct Payload {
     pub tool_input: Option<Value>,
 }
 
+/// One opted-in repo the hook acted on.
+#[derive(Debug, Serialize)]
+pub struct Visit {
+    pub repo: String,
+    pub snapshot: Option<String>,
+    /// Another driftr held the repo past the hook's wait; the next hook catches up.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub busy: bool,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Outcome {
+    pub event: Option<String>,
+    pub tool: Option<String>,
+    pub session: Option<String>,
+    pub visits: Vec<Visit>,
+}
+
+impl Outcome {
+    pub fn snapshots(&self) -> Vec<String> {
+        self.visits
+            .iter()
+            .filter_map(|v| v.snapshot.clone())
+            .collect()
+    }
+}
+
 /// Handles one hook invocation, snapshotting the session's cwd repo and the repo of the
 /// file a tool is touching, so edits outside the cwd (e.g. to ~/.claude/skills) are caught.
-/// Repos that haven't opted in (no driftr config) are left untouched. Returns the snapshots taken.
-pub fn run(input: &str) -> Result<Vec<String>> {
+/// Repos that haven't opted in (no driftr config) are left untouched.
+pub fn run(input: &str) -> Result<Outcome> {
     let payload: Payload = serde_json::from_str(input)?;
 
     // No author claim: a UserPromptSubmit snapshot holds edits made *between* turns.
@@ -38,7 +65,7 @@ pub fn run(input: &str) -> Result<Vec<String>> {
     }
 
     let mut seen = vec![];
-    let mut snapshots = vec![];
+    let mut visits = vec![];
     for dir in target_dirs(&payload) {
         let Ok(repo) = Repo::open(&dir) else {
             continue;
@@ -47,11 +74,28 @@ pub fn run(input: &str) -> Result<Vec<String>> {
             continue;
         }
         seen.push(repo.git_dir().to_path_buf());
-        let snapshot = repo.snapshot(&opts)?;
-        repo.record_event(&event_line(&payload, snapshot.as_deref()).to_string())?;
-        snapshots.extend(snapshot);
+        // Never stall the agent: a busy repo is skipped, and the next hook catches up.
+        repo.set_lock_wait(Duration::from_secs(3));
+        let (snapshot, busy) = match repo.snapshot(&opts) {
+            Ok(snapshot) => (snapshot, false),
+            Err(e) if format!("{e:#}").starts_with("busy:") => (None, true),
+            Err(e) => return Err(e),
+        };
+        if !busy {
+            repo.record_event(&event_line(&payload, snapshot.as_deref()).to_string())?;
+        }
+        visits.push(Visit {
+            repo: repo.top().display().to_string(),
+            snapshot,
+            busy,
+        });
     }
-    Ok(snapshots)
+    Ok(Outcome {
+        event: payload.hook_event_name,
+        tool: payload.tool_name,
+        session: payload.session_id,
+        visits,
+    })
 }
 
 /// The cwd, plus the nearest existing directory of the tool's `file_path` (which a

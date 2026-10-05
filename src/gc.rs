@@ -25,6 +25,7 @@ impl Repo {
     /// immediately in driftr-owned stores; in the user's repo, git's normal expiry applies,
     /// because an immediate prune would also take the user's own unreachable objects.
     pub fn gc(&self, dry_run: bool) -> Result<Report> {
+        let _lock = self.lock()?;
         let Some(tip) = self.last()? else {
             return Ok(Report {
                 dry_run,
@@ -121,6 +122,7 @@ impl Repo {
             .run(&["reflog", "expire", "--expire=now", snapshot_ref])?;
         if report.pruned {
             self.git.run(&["gc", "-q", "--prune=now"])?;
+            self.forget_index();
         }
         Ok(report)
     }

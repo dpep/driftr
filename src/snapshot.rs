@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::config::{Config, Matcher};
 use crate::external;
 use crate::git::Git;
+use crate::lock::{Guard, RepoLock};
 
 /// The main worktree's snapshot chain; linked worktrees get `refs/driftr/worktrees/<name>/snapshots`.
 /// Not `refs/worktree/`: gc run from another worktree doesn't see those and prunes the snapshots.
@@ -61,6 +62,7 @@ pub struct Repo {
     /// Shared by all worktrees of a repo.
     shared: PathBuf,
     snapshot_ref: String,
+    lock: RepoLock,
 }
 
 impl Repo {
@@ -119,8 +121,19 @@ impl Repo {
             external: false,
             index: Path::new(git_dir).join("driftr").join("index"),
             shared: Path::new(common).join("driftr"),
+            lock: RepoLock::new(Path::new(common).join("driftr").join("lock")),
             git: git.clone(),
         }))
+    }
+
+    /// Serializes writers across processes; hold it across any stage + commit pair.
+    pub fn lock(&self) -> Result<Guard<'_>> {
+        self.lock.acquire()
+    }
+
+    /// How long writers wait for another process's lock (hooks keep this short).
+    pub fn set_lock_wait(&self, wait: std::time::Duration) {
+        self.lock.set_wait(wait);
     }
 
     /// True for a plain directory tracked through a driftr-owned store.
@@ -247,18 +260,26 @@ impl Repo {
 
     /// Writes the in-scope files to a tree object and returns its id.
     pub fn stage(&self) -> Result<String> {
-        match self.stage_once() {
-            // A prune can drop blobs only the private index referenced; the stat cache would
-            // then skip rehashing them. The index is just a cache, so rebuild it.
-            Err(e) if format!("{e:#}").contains("invalid object") => {
-                fs::remove_file(&self.index)?;
-                self.stage_once()
+        self.healing(|| self.stage_once())
+    }
+
+    /// Runs `f`, and if it trips over an object a prune deleted, rebuilds the private index
+    /// and runs it once more. The index caches blobs by stat and trees by directory, so after
+    /// a prune it can name objects that no longer exist: `write-tree` then returns a cached
+    /// tree id without writing it, and the failure only surfaces at the next command.
+    fn healing<T>(&self, f: impl Fn() -> Result<T>) -> Result<T> {
+        let _lock = self.lock()?;
+        match f() {
+            Err(e) if is_missing_object(&e) => {
+                let _ = fs::remove_file(&self.index);
+                f()
             }
             result => result,
         }
     }
 
     fn stage_once(&self) -> Result<String> {
+        let _lock = self.lock()?;
         fs::create_dir_all(self.index.parent().unwrap())?;
         let git = self.root.with_index(&self.index);
         let files = self.files()?;
@@ -287,12 +308,15 @@ impl Repo {
 
     /// Snapshots the in-scope files; `None` when nothing changed since the last snapshot.
     pub fn snapshot(&self, opts: &SnapshotOpts) -> Result<Option<String>> {
-        let tree = self.stage()?;
-        self.commit(&tree, opts)
+        self.healing(|| {
+            let tree = self.stage_once()?;
+            self.commit(&tree, opts)
+        })
     }
 
     /// Records `tree` as the next snapshot unless it matches the last one.
     pub fn commit(&self, tree: &str, opts: &SnapshotOpts) -> Result<Option<String>> {
+        let _lock = self.lock()?;
         let last = self.last()?;
         let base = match &last {
             Some(rev) => self.git.run(&["rev-parse", &format!("{rev}^{{tree}}")])?,
@@ -387,12 +411,14 @@ impl Repo {
     /// Diff from a snapshot to the current in-scope files, including untracked ones.
     pub fn diff(&self, id: &str, path: Option<&str>) -> Result<String> {
         let commit = self.resolve(id)?;
-        let tree = self.stage()?;
-        let mut args = vec!["diff", &commit, &tree];
-        if let Some(path) = path {
-            args.extend(["--", path]);
-        }
-        self.git.run(&args)
+        self.healing(|| {
+            let tree = self.stage_once()?;
+            let mut args = vec!["diff", &commit, &tree];
+            if let Some(path) = path {
+                args.extend(["--", path]);
+            }
+            self.git.run(&args)
+        })
     }
 
     /// Restores `path` from snapshot `id`, first snapshotting what it overwrites.
@@ -418,8 +444,15 @@ impl Repo {
     /// The diff `restore` would apply, without applying it.
     pub fn preview_restore(&self, id: &str, path: &str) -> Result<String> {
         let commit = self.resolve_path(id, path)?;
-        let tree = self.stage()?;
-        self.git.run(&["diff", &tree, &commit, "--", path])
+        self.healing(|| {
+            let tree = self.stage_once()?;
+            self.git.run(&["diff", &tree, &commit, "--", path])
+        })
+    }
+
+    /// Drops the private index, e.g. after a prune; the next stage rebuilds it.
+    pub(crate) fn forget_index(&self) {
+        let _ = fs::remove_file(&self.index);
     }
 
     /// Resolves `id`, requiring `path` (relative to the cwd) to exist in it.
@@ -436,11 +469,12 @@ impl Repo {
     /// Appends one line to the shared event log.
     pub fn record_event(&self, line: &str) -> Result<()> {
         fs::create_dir_all(&self.shared)?;
-        let mut f = OpenOptions::new()
+        // One write per line: O_APPEND keeps concurrent writers' lines whole.
+        OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.shared.join("events.jsonl"))?;
-        writeln!(f, "{line}")?;
+            .open(self.shared.join("events.jsonl"))?
+            .write_all(format!("{line}\n").as_bytes())?;
         Ok(())
     }
 
@@ -492,6 +526,13 @@ impl Repo {
             }
         })
     }
+}
+
+fn is_missing_object(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}");
+    ["invalid object", "bad object", "not a valid 'tree' object"]
+        .iter()
+        .any(|m| msg.contains(m))
 }
 
 /// Paths go on stdin, NUL-separated and literal, so odd filenames can't be read as globs.
