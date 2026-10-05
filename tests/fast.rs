@@ -2,44 +2,12 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
 
-use common::{driftr, driftr_with, git, init_repo, write};
+use common::{driftr, driftr_with, git, init_repo, settle, write};
 use driftr::Repo;
 use driftr::fast::discover;
 use serde_json::Value;
 use tempfile::TempDir;
-
-static SETTLES: AtomicU64 = AtomicU64::new(0);
-
-/// Backdates every file under `dir` (but not .git) so the fingerprint trusts their stat.
-/// Each call lands on a distinct second: identical backdated times would fool git's own stat
-/// cache on a same-size edit, which real (forward-moving) mtimes never do.
-fn settle(dir: &Path) {
-    let n = SETTLES.fetch_add(1, Ordering::SeqCst);
-    let past = SystemTime::now() - Duration::from_secs(1000) + Duration::from_secs(5 * n);
-    settle_at(dir, past);
-}
-
-fn settle_at(dir: &Path, past: SystemTime) {
-    for entry in fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.file_name().unwrap() == ".git" {
-            continue;
-        }
-        if path.is_dir() {
-            settle_at(&path, past);
-        } else {
-            fs::File::options()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_modified(past)
-                .unwrap();
-        }
-    }
-}
 
 /// Runs the hook as a session would and returns its usage-log record.
 fn hook(dir: &Path) -> Value {

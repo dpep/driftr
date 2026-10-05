@@ -34,12 +34,35 @@ pub fn data_dir() -> Result<PathBuf> {
 
 /// The store for `dir` (canonical), whether or not it exists.
 pub fn store_for(dir: &Path) -> Result<PathBuf> {
-    // Reversible and still readable in a directory listing.
-    let name = dir
-        .to_string_lossy()
+    Ok(data_dir()?
+        .join("dirs")
+        .join(format!("{}.git", escape(dir))))
+}
+
+/// A path as one file name: reversible and still readable in a directory listing.
+pub fn escape(path: &Path) -> String {
+    path.to_string_lossy()
         .replace('%', "%25")
-        .replace('/', "%2F");
-    Ok(data_dir()?.join("dirs").join(format!("{name}.git")))
+        .replace('/', "%2F")
+}
+
+pub fn unescape(name: &str) -> PathBuf {
+    PathBuf::from(name.replace("%2F", "/").replace("%25", "%"))
+}
+
+/// Every directory tracked through a store, with the store.
+pub fn all() -> Result<Vec<(PathBuf, PathBuf)>> {
+    let Ok(entries) = fs::read_dir(data_dir()?.join("dirs")) else {
+        return Ok(vec![]);
+    };
+    Ok(entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let dir = unescape(name.strip_suffix(".git")?);
+            Some((dir, e.path()))
+        })
+        .collect())
 }
 
 /// The nearest tracked ancestor of `dir` (inclusive) and its store.

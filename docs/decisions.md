@@ -76,12 +76,27 @@ Profiled: a hook's cost was git process startup (~13 ms per spawn here, ~11 spaw
 
 Measured, median of 20 runs (wall time, including process start): opted-in no-op 102 → 12.8 ms; edit into `~/.claude` from another repo 140 → 25 ms, then ~5 ms less after directory pruning; repo not opted in 21 → 14 ms; not a repo 19 → 14.5 ms. That made `Bash` on `PostToolUse` affordable.
 
+## The sweep: target first, sweep as backstop, and grade the evidence
+
+`Bash` has no `file_path`, so a shell edit to an opted-in repo outside the cwd went unseen until some later hook targeted it. Two mechanisms, in order:
+
+- **Command paths:** absolute and `~/` tokens in a `Bash` command are matched against registered repos, which are then snapshotted at once. A false match costs a fingerprint, never a wrong snapshot.
+- **Sweep:** at `Stop`, every registered worktree is checked: a fingerprint per repo (no git), and a snapshot only if it changed. A per-repo `swept` marker throttles it to once per 30s across sessions, so N sessions ending turns together don't fan out N×M. Cost scales with changes, not with sessions.
+
+Every snapshot carries `Driftr-Via: cwd|file|command|sweep`, strongest evidence first (dedupe keeps the strongest). A sweep's change could be anyone's, so it names `Driftr-Candidates:`: sessions with `cwd`/`file`/`command` events in that repo's own event log in the last 15 minutes. That is a graded guess, not an author claim.
+
+Registry: `<data>/repos/<escaped path>` symlinks to each repo's common git dir. A dangling link means the repo is gone, and there is one atomic file per repo, so no lock is needed. External stores are already listed by `dirs/`. Worktrees are read from `<common>/worktrees/*/gitdir`, without git. Identity is location: each clone is its own entry (their unsaved work differs), and branches need nothing (snapshots follow the working tree; `Driftr-Head:` records the branch tip).
+
+Rejected: a separate session→repo registry. Each repo's `events.jsonl` already records session, time and `via`, so candidates are read from there. That is the same answer with no second source of truth to prune.
+
+To keep tests off real repos, the CLI reads the registry and passes it to the hook. The library never reads it, so library tests can't sweep the developer's own repos.
+
 ## Open
 
 - A removed worktree leaves its ref behind, keeping its objects alive. That needs a `driftr gc` eventually.
 - Gitignored files can't be tracked, even explicitly. Fine for now; `track --force` if a real need shows up.
 - Snapshot ref growth and pruning policy are unmeasured.
-- `Bash` has no `file_path`, so shell edits to a tracked directory *outside* the cwd (e.g. `~/.claude` from a project) wait for the next hook that targets it. A Stop-time sweep of all opted-in repos would close that, now that a no-op costs no git.
+- Judge the sweep with `driftr report`'s `swept` column: if it rarely catches what the targeted hooks missed, pull it.
 - Multi-file subjects always say "Update", even when most files were added (e.g. newly in scope).
 - `gc` keeps subjects verbatim, so generated ones that count files go stale ("Start tracking 342 files" now holds 96). Regenerating generated subjects needs a marker for which ones were explicit.
 - Finding why a file is in scope (or what's bloating it) took manual surveying; `files --why` and a size/churn view would have surfaced `skills/synced` and `bin/` immediately.

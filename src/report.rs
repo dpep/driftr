@@ -13,6 +13,8 @@ pub struct Row {
     pub runs: usize,
     /// Runs that took at least one snapshot: changes the hook actually caught.
     pub caught: usize,
+    /// Runs where the end-of-turn sweep caught a change the targeted hooks hadn't.
+    pub swept: usize,
     /// Runs settled by the fingerprint alone (no git).
     pub fast: usize,
     pub busy: usize,
@@ -48,6 +50,10 @@ pub fn summarize(records: &[Value], since: u64) -> Vec<Row> {
                     .iter()
                     .filter(|r| any(r, &|v| v["snapshot"].is_string()))
                     .count(),
+                swept: rs
+                    .iter()
+                    .filter(|r| any(r, &|v| v["via"] == "sweep" && v["snapshot"].is_string()))
+                    .count(),
                 fast: rs.iter().filter(|r| any(r, &|v| v["fast"] == true)).count(),
                 busy: rs.iter().filter(|r| any(r, &|v| v["busy"] == true)).count(),
                 errors: rs.iter().filter(|r| r["error"].is_string()).count(),
@@ -73,13 +79,22 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 pub fn render(rows: &[Row]) -> String {
     let mut out = format!(
-        "{:<18} {:<14} {:>6} {:>7} {:>6} {:>5} {:>6} {:>8} {:>8}\n",
-        "event", "tool", "runs", "caught", "fast", "busy", "errors", "p50 ms", "p95 ms"
+        "{:<18} {:<14} {:>6} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>8}\n",
+        "event", "tool", "runs", "caught", "swept", "fast", "busy", "errors", "p50 ms", "p95 ms"
     );
     for r in rows {
         out.push_str(&format!(
-            "{:<18} {:<14} {:>6} {:>7} {:>6} {:>5} {:>6} {:>8.1} {:>8.1}\n",
-            r.event, r.tool, r.runs, r.caught, r.fast, r.busy, r.errors, r.p50_ms, r.p95_ms
+            "{:<18} {:<14} {:>6} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8.1} {:>8.1}\n",
+            r.event,
+            r.tool,
+            r.runs,
+            r.caught,
+            r.swept,
+            r.fast,
+            r.busy,
+            r.errors,
+            r.p50_ms,
+            r.p95_ms
         ));
     }
     out
@@ -97,6 +112,7 @@ mod tests {
             json!({"time": 11, "event": "PostToolUse", "tool": "Bash", "profile": {"total_ms": 90.0}, "visits": [{"snapshot": "abc"}]}),
             json!({"time": 12, "event": "PostToolUse", "tool": "Bash", "profile": {"total_ms": 20.0}, "visits": [{"busy": true}]}),
             json!({"time": 13, "event": "Stop", "profile": {"total_ms": 5.0}, "error": "boom"}),
+            json!({"time": 14, "event": "Stop", "profile": {"total_ms": 7.0}, "visits": [{"via": "cwd", "fast": true}, {"via": "sweep", "snapshot": "def"}]}),
             json!({"time": 1, "event": "Stop", "profile": {"total_ms": 5.0}}),
         ];
         let rows = summarize(&records, 10);
@@ -111,9 +127,8 @@ mod tests {
             (3, 1, 1, 1, 0)
         );
         assert_eq!((bash.p50_ms, bash.p95_ms), (20.0, 90.0));
-        assert_eq!(
-            (rows[1].tool.as_str(), rows[1].runs, rows[1].errors),
-            ("-", 1, 1)
-        );
+        let stop = &rows[1];
+        assert_eq!((stop.tool.as_str(), stop.runs, stop.errors), ("-", 2, 1));
+        assert_eq!((stop.caught, stop.swept, stop.fast), (1, 1, 1));
     }
 }

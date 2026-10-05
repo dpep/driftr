@@ -71,7 +71,11 @@ Narrowing the scope doesn't touch history already taken. `driftr gc` rewrites th
 }
 ```
 
-`UserPromptSubmit` captures edits made between turns and `Stop` the turn itself. The tool events bracket each file edit, including edits to tracked directories outside the session's cwd, such as `~/.claude/skills` edited from a project session. `Bash` on `PostToolUse` attributes edits made through shell commands to the command that made them.
+`UserPromptSubmit` captures edits made between turns and `Stop` the turn itself. The tool events bracket each file edit, including edits to tracked directories outside the session's cwd, such as `~/.claude/skills` edited from a project session. `Bash` on `PostToolUse` attributes edits made through shell commands to the command that made them. A command that names a path in another opted-in repo (`sed -i ~/.claude/skills/...`) snapshots that repo too.
+
+At `Stop`, the hook also sweeps every opted-in repo (each worktree separately) and snapshots any that changed during the turn: the backstop for shell edits the command text didn't reveal. A repo swept by any session in the last 30s is skipped. Each snapshot's `Driftr-Via:` records how its repo was found, strongest evidence first: `cwd`, `file`, `command`, `sweep`. A sweep can't know who made the change, so it also lists `Driftr-Candidates:`, the sessions with stronger evidence in that repo in the last 15 minutes.
+
+Opted-in git repos are registered as symlinks in `~/.local/share/driftr/repos/` (named by path, pointing at the repo's git dir); any `init` or `snapshot` registers, and the sweep prunes entries whose repo is gone. Each clone is its own entry, since identity is the location on disk. Worktrees share their repo's opt-in and are found through it.
 
 Hooks are cheap when nothing changed, which is most of the time. driftr finds the repo without running git and compares a stat fingerprint of the in-scope files with the one saved at the last snapshot, so a no-op hook spawns no git at all. Only a real change pays for a snapshot. Concurrent sessions are serialized by a per-repo lock; a hook waits at most 3s, then skips (the next hook catches up).
 

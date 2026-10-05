@@ -10,7 +10,7 @@ use serde_json::json;
 
 use driftr::output::Format;
 use driftr::watch::Settle;
-use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, report, status, usage};
+use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, registry, report, status, usage};
 
 const EXIT_CODES: &str = "\
 Exit codes:
@@ -152,6 +152,7 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
     }
     if let Command::Init = command {
         let (repo, created) = Repo::init_dir(Path::new("."))?;
+        registry::register(repo.common_dir())?;
         let config = repo.config_path().display().to_string();
         if !created {
             eprintln!("already initialized");
@@ -197,6 +198,8 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
                 .unwrap_or_default();
             opts.message = message;
             let id = repo.snapshot(&opts)?;
+            // Repos opted in before the registry existed join on their next snapshot.
+            let _ = registry::register(repo.common_dir());
             fmt.one(&json!({ "snapshot": id }), |_| id.clone())?;
         }
         Command::Log { path, session } => {
@@ -308,7 +311,15 @@ fn run_hook(start: Instant, show_profile: bool) -> ExitCode {
         }
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
-        hook::run(&input)
+        // The registry lets Stop sweep every opted-in repo and match paths in commands.
+        let ctx = hook::Context {
+            registered: registry::worktrees().unwrap_or_default(),
+        };
+        let outcome = hook::run(&input, &ctx)?;
+        for visit in &outcome.visits {
+            let _ = registry::register(&visit.common_dir);
+        }
+        Ok(outcome)
     })();
     let profile = profile::summary(start.elapsed());
     let time = SystemTime::now()

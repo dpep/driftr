@@ -137,6 +137,11 @@ impl Repo {
         self.lock.set_wait(wait);
     }
 
+    /// The git dir shared by all worktrees (`.git`, or the external store).
+    pub fn common_dir(&self) -> &Path {
+        self.shared.parent().unwrap()
+    }
+
     /// True for a plain directory tracked through a driftr-owned store.
     pub fn is_external(&self) -> bool {
         self.external

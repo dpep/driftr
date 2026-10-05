@@ -20,11 +20,12 @@ Automatic working history for AI-assisted development, kept in plain git. See RE
 - `src/lock.rs`: the per-repo lock serializing writers across sessions
 - `src/external.rs`: stores for directories that aren't git repos
 - `src/gc.rs`: rewriting history to the current scope
+- `src/registry.rs`: opted-in repos for the end-of-turn sweep
 - `src/profile.rs`, `src/usage.rs`, `src/report.rs`: timings, the hook usage log, and its summary
 - `src/git.rs`: git CLI wrapper; clears inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`
 - `src/output.rs`: the one renderer behind `-j`/`-J`
 - `src/status.rs`, `src/watch.rs`, `src/main.rs`
-- `tests/snapshot.rs` (library), `tests/cli.rs`, `tests/external.rs`, `tests/fast.rs`, `tests/concurrency.rs` (binary end to end), `tests/common/`
+- `tests/snapshot.rs` (library), `tests/cli.rs`, `tests/external.rs`, `tests/fast.rs`, `tests/concurrency.rs`, `tests/sweep.rs` (binary end to end), `tests/common/`
 
 ## Gate
 

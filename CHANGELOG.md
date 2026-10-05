@@ -16,3 +16,4 @@
 - Safe under concurrent sessions: a per-repo lock spans stage and commit; hooks wait at most 3s, then skip.
 - No-op hooks spawn no git: the repo is found directly and a stat fingerprint settles "nothing changed" (an opted-in no-op went from ~100 ms to ~13 ms).
 - `--profile` on every command; every hook run is logged with its timings, and `driftr report` summarizes what each hook costs and catches.
+- End-of-turn sweep: on `Stop`, every opted-in repo (and worktree) that changed during the turn is snapshotted, throttled to once per 30s per repo. Shell commands naming a path in another opted-in repo snapshot it immediately. Snapshots record `Driftr-Via:` (how the repo was found) and, for sweeps, `Driftr-Candidates:`. Repos opted in earlier join the sweep on their next `snapshot`.

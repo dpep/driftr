@@ -7,6 +7,7 @@ pub mod hook;
 pub mod lock;
 pub mod output;
 pub mod profile;
+pub mod registry;
 pub mod report;
 pub mod snapshot;
 pub mod status;

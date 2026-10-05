@@ -322,7 +322,7 @@ fn hook_ignores_repos_that_have_not_opted_in() {
     let (tmp, repo) = repo();
     write(tmp.path(), "a.md", "1\n");
     assert!(
-        driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+        driftr::hook::run(&hook_input(tmp.path(), "Stop"), &Default::default())
             .unwrap()
             .snapshots()
             .is_empty()
@@ -334,7 +334,7 @@ fn hook_ignores_repos_that_have_not_opted_in() {
 fn hook_ignores_directories_outside_git() {
     let tmp = TempDir::new().unwrap();
     assert!(
-        driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+        driftr::hook::run(&hook_input(tmp.path(), "Stop"), &Default::default())
             .unwrap()
             .snapshots()
             .is_empty()
@@ -347,7 +347,7 @@ fn hook_snapshots_with_session_and_records_the_event() {
     repo.init().unwrap();
     write(tmp.path(), "a.md", "1\n");
 
-    let [id] = &driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+    let [id] = &driftr::hook::run(&hook_input(tmp.path(), "Stop"), &Default::default())
         .unwrap()
         .snapshots()[..]
     else {
@@ -379,7 +379,9 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
         "tool_name": "Write",
         "tool_input": {"file_path": tmp.path().join("skills/new.md")},
     });
-    let taken = driftr::hook::run(&payload.to_string()).unwrap().snapshots();
+    let taken = driftr::hook::run(&payload.to_string(), &Default::default())
+        .unwrap()
+        .snapshots();
     assert_eq!(taken.len(), 1);
     assert_eq!(repo.last().unwrap().as_ref(), taken.first());
 
@@ -391,7 +393,7 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
         "tool_input": {"file_path": tmp.path().join("skills/new.md")},
     });
     assert_eq!(
-        driftr::hook::run(&same.to_string())
+        driftr::hook::run(&same.to_string(), &Default::default())
             .unwrap()
             .snapshots()
             .len(),
@@ -406,7 +408,7 @@ fn hook_snapshots_the_repo_of_the_file_being_edited() {
     });
     write(tmp.path(), "skills/new.md", "again\n");
     assert_eq!(
-        driftr::hook::run(&pre.to_string())
+        driftr::hook::run(&pre.to_string(), &Default::default())
             .unwrap()
             .snapshots()
             .len(),
