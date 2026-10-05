@@ -7,7 +7,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::snapshot::{Repo, SnapshotOpts};
+use crate::fast;
+use crate::snapshot::{Repo, SnapshotOpts, append_event};
 
 /// The subset of Claude Code's hook payload driftr reads; every field is optional.
 #[derive(Debug, Default, Deserialize)]
@@ -28,6 +29,9 @@ pub struct Visit {
     /// Another driftr held the repo past the hook's wait; the next hook catches up.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub busy: bool,
+    /// Settled by the stat fingerprint alone: nothing changed, and git never ran.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -67,13 +71,30 @@ pub fn run(input: &str) -> Result<Outcome> {
     let mut seen = vec![];
     let mut visits = vec![];
     for dir in target_dirs(&payload) {
+        // Found without git; no repo, or one not opted in, costs no spawns at all.
+        let Some(loc) = fast::discover(&dir) else {
+            continue;
+        };
+        if !loc.config_path().exists() || seen.contains(&loc.git_dir) {
+            continue;
+        }
+        seen.push(loc.git_dir.clone());
+        if fast::unchanged(&loc) {
+            append_event(
+                &loc.common_dir.join("driftr"),
+                &event_line(&payload, None).to_string(),
+            )?;
+            visits.push(Visit {
+                repo: loc.top.display().to_string(),
+                snapshot: None,
+                busy: false,
+                fast: true,
+            });
+            continue;
+        }
         let Ok(repo) = Repo::open(&dir) else {
             continue;
         };
-        if !repo.enabled() || seen.contains(&repo.git_dir().to_path_buf()) {
-            continue;
-        }
-        seen.push(repo.git_dir().to_path_buf());
         // Never stall the agent: a busy repo is skipped, and the next hook catches up.
         repo.set_lock_wait(Duration::from_secs(3));
         let (snapshot, busy) = match repo.snapshot(&opts) {
@@ -88,6 +109,7 @@ pub fn run(input: &str) -> Result<Outcome> {
             repo: repo.top().display().to_string(),
             snapshot,
             busy,
+            fast: false,
         });
     }
     Ok(Outcome {

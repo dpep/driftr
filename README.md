@@ -19,11 +19,12 @@ driftr diff <id> [path]                   # snapshot vs. the current in-scope fi
 driftr restore <path> --at <id> [--dry-run]   # snapshots what it overwrites first
 driftr watch [--idle 30] [--max 300]      # poll; snapshot when the tree settles
 driftr gc [--dry-run]                     # rewrite history to the current scope
+driftr report [--hours N]                 # what each hook costs and catches
 ```
 
 Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it.
 
-Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line). Exit codes: `0` success, `1` empty result (`log`, `files`) or not enabled (`status`), `2` error, `64` usage error.
+Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line), and `--profile` to print where the time went, per git command and phase, to stderr. Exit codes: `0` success, `1` empty result (`log`, `files`) or not enabled (`status`), `2` error, `64` usage error.
 
 Snapshots are ordinary git commits on `refs/driftr/snapshots` (linked worktrees: `refs/driftr/worktrees/<name>/snapshots`), so plain git works on them too:
 
@@ -65,12 +66,16 @@ Narrowing the scope doesn't touch history already taken. `driftr gc` rewrites th
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "driftr hook" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "driftr hook" }] }],
     "PreToolUse": [{ "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "driftr hook" }] }],
-    "PostToolUse": [{ "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "driftr hook" }] }]
+    "PostToolUse": [{ "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": "driftr hook" }] }]
   }
 }
 ```
 
-`UserPromptSubmit` captures edits made between turns and `Stop` the turn itself. The tool events bracket each file edit, including edits to tracked directories outside the session's cwd, such as `~/.claude/skills` edited from a project session. Each event is also appended to `<git dir>/driftr/events.jsonl`.
+`UserPromptSubmit` captures edits made between turns and `Stop` the turn itself. The tool events bracket each file edit, including edits to tracked directories outside the session's cwd, such as `~/.claude/skills` edited from a project session. `Bash` on `PostToolUse` attributes edits made through shell commands to the command that made them.
+
+Hooks are cheap when nothing changed, which is most of the time. driftr finds the repo without running git and compares a stat fingerprint of the in-scope files with the one saved at the last snapshot, so a no-op hook spawns no git at all. Only a real change pays for a snapshot. Concurrent sessions are serialized by a per-repo lock; a hook waits at most 3s, then skips (the next hook catches up).
+
+Each event is appended to `<git dir>/driftr/events.jsonl`, and every hook run, with its timings and outcome, to `~/.local/share/driftr/hooks.jsonl` (capped). `driftr report` summarizes it per event and tool: runs, how many caught a change, how many the fast path settled, busy skips, errors, and p50/p95 latency.
 
 ## Build
 

@@ -60,13 +60,28 @@ Only driftr's ref and reflog are expired. `git gc --prune=now` runs only in exte
 
 Two bugs it surfaced: `rm --cached` refuses entries that differ from both file and HEAD, which only guards a *user's* staging, so driftr's private-index removals use `-f`. And a prune can delete blobs only the private index references, after which the stat cache skips rehashing them, so staging rebuilds the index once on "invalid object".
 
+## Concurrency: one lock per repo, across stage and commit
+
+Measured with 8 parallel writers: they collided on the private index's `index.lock` and lost the ref compare-and-swap. A slow writer could also commit an older tree over a newer one. An advisory lock in `<common dir>/driftr/lock`, shared across worktrees, now spans stage + commit, `gc`, and `watch`'s tick. It is re-entrant per process, so restore's safety snapshot nests. The CLI waits up to 30s; hooks wait 3s, then record `busy` and skip, which is safe because snapshots are idempotent and the next hook catches up. CAS on the ref stays as a second line of defense.
+
+The tests also caught a prune hazard. The private index's cache-tree can name a tree that `git gc --prune=now` deleted, and `write-tree` then returns that id without writing the tree. Any missing-object failure rebuilds the index (it is only a cache) and retries once.
+
+## Fast path: no git for a no-op
+
+Profiled: a hook's cost was git process startup (~13 ms per spawn here, ~11 spawns), with ~6 ms of driftr's own work. Most hook runs change nothing, so the no-op path now avoids git entirely:
+
+- Discovery walks up for `.git` (dir or `gitdir:` file, plus `commondir`) or a driftr store, in the same order of precedence as `Repo::open`.
+- A fingerprint hashes the config text plus each in-scope file's path, size, mtime (ns), inode and mode. The walk uses the `ignore` crate, gitignore-aware, skipping `dir/**`-excluded directories. It is saved at each snapshot, taken *before* staging and under the lock. If it matches, the last snapshot already holds this state.
+- Safety: a file modified in the last 2s makes the fingerprint untrusted (none is saved). A change during a snapshot leaves the saved fingerprint stale, which costs one full run, never a miss. The walk may see more than git does (nested repos), which only causes extra full runs. The one blind spot is a file that is both tracked and gitignored.
+
+Measured, median of 20 runs (wall time, including process start): opted-in no-op 102 → 12.8 ms; edit into `~/.claude` from another repo 140 → 25 ms, then ~5 ms less after directory pruning; repo not opted in 21 → 14 ms; not a repo 19 → 14.5 ms. That made `Bash` on `PostToolUse` affordable.
+
 ## Open
 
 - A removed worktree leaves its ref behind, keeping its objects alive. That needs a `driftr gc` eventually.
 - Gitignored files can't be tracked, even explicitly. Fine for now; `track --force` if a real need shows up.
 - Snapshot ref growth and pruning policy are unmeasured.
-- Edits made through shell commands aren't bracketed: they land in the next snapshot, tagged with whatever event took it. `Bash` on `PostToolUse` would fix attribution at ~40–140 ms per command.
+- `Bash` has no `file_path`, so shell edits to a tracked directory *outside* the cwd (e.g. `~/.claude` from a project) wait for the next hook that targets it. A Stop-time sweep of all opted-in repos would close that, now that a no-op costs no git.
 - Multi-file subjects always say "Update", even when most files were added (e.g. newly in scope).
 - `gc` keeps subjects verbatim, so generated ones that count files go stale ("Start tracking 342 files" now holds 96). Regenerating generated subjects needs a marker for which ones were explicit.
-- Concurrent sessions share one private index per worktree; a lock collision fails one hook's snapshot (swallowed). Unmeasured so far.
 - Finding why a file is in scope (or what's bloating it) took manual surveying; `files --why` and a size/churn view would have surfaced `skills/synced` and `bin/` immediately.

@@ -13,3 +13,6 @@
 - The hook also snapshots the tracked repo of the file a tool is editing, so `PreToolUse`/`PostToolUse` on `Write|Edit` catch edits outside the session's cwd.
 - `driftr gc` rewrites snapshot history to the current scope, e.g. after `untrack`, and prunes the purged content from driftr-owned stores.
 - `track dir/` with a trailing slash means a directory even before it exists.
+- Safe under concurrent sessions: a per-repo lock spans stage and commit; hooks wait at most 3s, then skip.
+- No-op hooks spawn no git: the repo is found directly and a stat fingerprint settles "nothing changed" (an opted-in no-op went from ~100 ms to ~13 ms).
+- `--profile` on every command; every hook run is logged with its timings, and `driftr report` summarizes what each hook costs and catches.

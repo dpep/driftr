@@ -117,6 +117,7 @@ impl Repo {
             ])?,
             None => self.git.run(&["update-ref", "-d", snapshot_ref, &tip])?,
         };
+        crate::fast::save(self.git_dir(), None);
         // Only driftr's reflog: the user's branch reflogs are theirs.
         self.git
             .run(&["reflog", "expire", "--expire=now", snapshot_ref])?;

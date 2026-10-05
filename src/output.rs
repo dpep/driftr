@@ -25,6 +25,19 @@ impl Format {
         Ok(())
     }
 
+    /// A list answer whose text form is a table rendered as a whole.
+    pub fn rows_or_table<T: Serialize>(
+        self,
+        rows: &[T],
+        table: impl Fn(&[T]) -> String,
+    ) -> Result<()> {
+        match self {
+            Format::Text => print!("{}", table(rows)),
+            _ => self.rows(rows, |_| String::new())?,
+        }
+        Ok(())
+    }
+
     /// A single answer; `text` returning `None` prints nothing in text mode.
     pub fn one<T: Serialize>(
         self,

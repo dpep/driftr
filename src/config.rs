@@ -73,18 +73,32 @@ fn literal_root(pattern: &str) -> Option<String> {
 pub struct Matcher {
     include: Patterns,
     exclude: Patterns,
+    /// Directories whose every file is excluded: the `dir` of each `dir/**` exclude.
+    excluded_dirs: Patterns,
 }
 
 impl Matcher {
     pub fn new(scope: &Scope) -> Result<Matcher> {
+        let dirs: Vec<String> = scope
+            .exclude
+            .iter()
+            .filter_map(|p| p.strip_suffix("/**"))
+            .map(String::from)
+            .collect();
         Ok(Matcher {
             include: Patterns::new(&scope.include)?,
             exclude: Patterns::new(&scope.exclude)?,
+            excluded_dirs: Patterns::new(&dirs)?,
         })
     }
 
     pub fn matches(&self, path: &str) -> bool {
         self.include.matches(path) && !self.exclude.matches(path)
+    }
+
+    /// True when nothing under directory `dir` can match, so a walk can skip it.
+    pub fn prunes_dir(&self, dir: &str) -> bool {
+        self.excluded_dirs.matches(dir)
     }
 }
 
@@ -143,6 +157,21 @@ mod tests {
         assert!(m.matches("docs/deep/plan.md"));
         assert!(!m.matches("src/main.rs"));
         assert!(!m.matches("node_modules/pkg/README.md"));
+    }
+
+    #[test]
+    fn prunes_only_directories_excluded_wholesale() {
+        let m = matcher(
+            &["**/*.md"],
+            &["skills/synced/**", "**/node_modules/**", "draft*"],
+        );
+        assert!(m.prunes_dir("skills/synced"));
+        assert!(m.prunes_dir("a/b/node_modules"));
+        assert!(!m.prunes_dir("skills"));
+        assert!(
+            !m.prunes_dir("drafts"),
+            "a file-level exclude never prunes a directory"
+        );
     }
 
     #[test]

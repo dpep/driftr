@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::config::{Config, Matcher};
 use crate::external;
+use crate::fast;
 use crate::git::Git;
 use crate::lock::{Guard, RepoLock};
 
@@ -308,10 +309,16 @@ impl Repo {
 
     /// Snapshots the in-scope files; `None` when nothing changed since the last snapshot.
     pub fn snapshot(&self, opts: &SnapshotOpts) -> Result<Option<String>> {
-        self.healing(|| {
+        let _lock = self.lock()?;
+        // Taken before staging: a file changing mid-snapshot leaves it stale, which only
+        // costs the next fast-path check a full run, never a missed change.
+        let fp = fast::fingerprint(&self.top, &self.config_path()).unwrap_or(None);
+        let result = self.healing(|| {
             let tree = self.stage_once()?;
             self.commit(&tree, opts)
-        })
+        });
+        fast::save(&self.git_dir, result.as_ref().ok().and(fp));
+        result
     }
 
     /// Records `tree` as the next snapshot unless it matches the last one.
@@ -468,14 +475,7 @@ impl Repo {
 
     /// Appends one line to the shared event log.
     pub fn record_event(&self, line: &str) -> Result<()> {
-        fs::create_dir_all(&self.shared)?;
-        // One write per line: O_APPEND keeps concurrent writers' lines whole.
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.shared.join("events.jsonl"))?
-            .write_all(format!("{line}\n").as_bytes())?;
-        Ok(())
+        append_event(&self.shared, line)
     }
 
     /// A snapshot id, or `@` for the latest (`@~1` the one before, and so on).
@@ -526,6 +526,18 @@ impl Repo {
             }
         })
     }
+}
+
+/// Appends one line to a repo's event log (`<common dir>/driftr/events.jsonl`).
+pub fn append_event(driftr_dir: &Path, line: &str) -> Result<()> {
+    fs::create_dir_all(driftr_dir)?;
+    // One write per line: O_APPEND keeps concurrent writers' lines whole.
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(driftr_dir.join("events.jsonl"))?
+        .write_all(format!("{line}\n").as_bytes())?;
+    Ok(())
 }
 
 fn is_missing_object(e: &anyhow::Error) -> bool {

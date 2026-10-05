@@ -10,7 +10,7 @@ use serde_json::json;
 
 use driftr::output::Format;
 use driftr::watch::Settle;
-use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, status, usage};
+use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, report, status, usage};
 
 const EXIT_CODES: &str = "\
 Exit codes:
@@ -95,6 +95,12 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Summarize what each hook costs and catches, from the hook usage log
+    Report {
+        /// Only runs from the last N hours
+        #[arg(long)]
+        hours: Option<u64>,
+    },
     /// Claude Code hook: reads the hook JSON on stdin and snapshots in opted-in repos
     Hook,
 }
@@ -133,6 +139,17 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command, fmt: Format) -> Result<ExitCode> {
+    if let Command::Report { hours } = command {
+        let since = hours.map_or(0, |h| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+                .saturating_sub(h * 3600)
+        });
+        let rows = report::summarize(&usage::read()?, since);
+        fmt.rows_or_table(&rows, report::render)?;
+        return Ok(found(!rows.is_empty()));
+    }
     if let Command::Init = command {
         let (repo, created) = Repo::init_dir(Path::new("."))?;
         let config = repo.config_path().display().to_string();
@@ -145,7 +162,7 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
     }
     let repo = Repo::open(Path::new("."))?;
     match command {
-        Command::Init => unreachable!("handled before opening a repo"),
+        Command::Init | Command::Report { .. } => unreachable!("handled before opening a repo"),
         Command::Track { paths } => {
             let patterns = paths
                 .iter()
