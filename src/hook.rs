@@ -20,17 +20,11 @@ pub struct Payload {
     pub tool_input: Option<Value>,
 }
 
-/// Handles one hook invocation. Returns the snapshot id, if one was taken.
-/// Repos that haven't opted in (no driftr config) are left untouched.
-pub fn run(input: &str) -> Result<Option<String>> {
+/// Handles one hook invocation, snapshotting the session's cwd repo and the repo of the
+/// file a tool is touching, so edits outside the cwd (e.g. to ~/.claude/skills) are caught.
+/// Repos that haven't opted in (no driftr config) are left untouched. Returns the snapshots taken.
+pub fn run(input: &str) -> Result<Vec<String>> {
     let payload: Payload = serde_json::from_str(input)?;
-    let dir = payload.cwd.clone().unwrap_or_else(|| ".".into());
-    let Ok(repo) = Repo::open(Path::new(&dir)) else {
-        return Ok(None);
-    };
-    if !repo.enabled() {
-        return Ok(None);
-    }
 
     // No author claim: a UserPromptSubmit snapshot holds edits made *between* turns.
     // The event says which boundary took it; attribution is inferred from that later.
@@ -42,9 +36,37 @@ pub fn run(input: &str) -> Result<Option<String>> {
     if let Some(event) = &payload.hook_event_name {
         opts.trailers.push(("Driftr-Event".into(), event.clone()));
     }
-    let snapshot = repo.snapshot(&opts)?;
-    repo.record_event(&event_line(&payload, snapshot.as_deref()).to_string())?;
-    Ok(snapshot)
+
+    let mut seen = vec![];
+    let mut snapshots = vec![];
+    for dir in target_dirs(&payload) {
+        let Ok(repo) = Repo::open(&dir) else {
+            continue;
+        };
+        if !repo.enabled() || seen.contains(&repo.git_dir().to_path_buf()) {
+            continue;
+        }
+        seen.push(repo.git_dir().to_path_buf());
+        let snapshot = repo.snapshot(&opts)?;
+        repo.record_event(&event_line(&payload, snapshot.as_deref()).to_string())?;
+        snapshots.extend(snapshot);
+    }
+    Ok(snapshots)
+}
+
+/// The cwd, plus the nearest existing directory of the tool's `file_path` (which a
+/// PreToolUse Write may not have created yet).
+fn target_dirs(p: &Payload) -> Vec<PathBuf> {
+    let mut dirs = vec![p.cwd.clone().unwrap_or_else(|| ".".into())];
+    let file = p
+        .tool_input
+        .as_ref()
+        .and_then(|t| t.get("file_path"))
+        .and_then(Value::as_str);
+    if let Some(dir) = file.and_then(|f| Path::new(f).ancestors().skip(1).find(|a| a.is_dir())) {
+        dirs.push(dir.to_path_buf());
+    }
+    dirs
 }
 
 /// Raw material for attribution experiments: what the agent said it touched vs. what changed.

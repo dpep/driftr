@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::config::{Config, Matcher};
+use crate::external;
 use crate::git::Git;
 
 /// The main worktree's snapshot chain; linked worktrees get `refs/driftr/worktrees/<name>/snapshots`.
@@ -31,6 +32,15 @@ impl SnapshotOpts {
 }
 
 #[derive(Debug, PartialEq, Serialize)]
+#[serde(tag = "action", content = "pattern", rename_all = "lowercase")]
+pub enum Untrack {
+    /// An include pattern was dropped.
+    Removed(String),
+    /// The path was added to the excludes.
+    Excluded(String),
+}
+
+#[derive(Debug, PartialEq, Serialize)]
 pub struct Entry {
     pub id: String,
     pub time: String,
@@ -43,6 +53,7 @@ pub struct Repo {
     /// Runs from the worktree root, where scope patterns are anchored.
     root: Git,
     top: PathBuf,
+    git_dir: PathBuf,
     /// Per-worktree.
     index: PathBuf,
     /// Shared by all worktrees of a repo.
@@ -51,17 +62,42 @@ pub struct Repo {
 }
 
 impl Repo {
+    /// Opens the git repo containing `dir`, else the external store of a tracked ancestor.
     pub fn open(dir: &Path) -> Result<Repo> {
         let git = Git::new(dir);
-        let out = git
-            .run(&[
-                "rev-parse",
-                "--path-format=absolute",
-                "--show-toplevel",
-                "--git-dir",
-                "--git-common-dir",
-            ])
-            .context("not in a git worktree")?;
+        if let Some(repo) = Repo::locate(&git)? {
+            return Ok(repo);
+        }
+        if let Some((top, store)) = external::find(dir)? {
+            let git = git.with_repo(&store, &top);
+            return Repo::locate(&git)?.context("external store is unreadable");
+        }
+        bail!("not in a git repository or a directory driftr tracks (`driftr init` tracks one)")
+    }
+
+    /// Opts `dir` in. Outside any git repo, first creates an external store for it.
+    /// Returns the repo and whether a config was created.
+    pub fn init_dir(dir: &Path) -> Result<(Repo, bool)> {
+        let git = Git::new(dir);
+        if Repo::locate(&git)?.is_none() && external::find(dir)?.is_none() {
+            external::create(dir)?;
+        }
+        let repo = Repo::open(dir)?;
+        let created = repo.init()?;
+        Ok((repo, created))
+    }
+
+    fn locate(git: &Git) -> Result<Option<Repo>> {
+        let Some(out) = git.try_run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ])?
+        else {
+            return Ok(None);
+        };
         let [top, git_dir, common] = out.lines().collect::<Vec<_>>()[..] else {
             bail!("unexpected rev-parse output: {out}");
         };
@@ -71,14 +107,20 @@ impl Repo {
             }
             _ => REF.to_string(),
         };
-        Ok(Repo {
+        Ok(Some(Repo {
             snapshot_ref,
-            root: Git::new(Path::new(top)),
+            root: git.at(Path::new(top)),
             top: top.into(),
+            git_dir: git_dir.into(),
             index: Path::new(git_dir).join("driftr").join("index"),
             shared: Path::new(common).join("driftr"),
-            git,
-        })
+            git: git.clone(),
+        }))
+    }
+
+    /// Where the snapshots are stored: `.git`, or an external store.
+    pub fn git_dir(&self) -> &Path {
+        &self.git_dir
     }
 
     /// This worktree's snapshot chain, outside any branch.
@@ -124,14 +166,7 @@ impl Repo {
 
     /// Adds `path` (relative to the caller's directory) to the scope; returns the pattern added.
     pub fn track(&self, path: &str) -> Result<String> {
-        let prefix = self.git.run(&["rev-parse", "--show-prefix"])?;
-        let rel = format!("{prefix}{}", path.trim_start_matches("./"));
-        let rel = rel.trim_end_matches('/');
-        let mut pattern = globset::escape(rel);
-        if self.top.join(rel).is_dir() {
-            pattern.push_str("/**");
-        }
-
+        let pattern = self.pattern_for(path)?;
         let mut config = self.config()?;
         if !config.scope.include.contains(&pattern) {
             config.scope.include.push(pattern.clone());
@@ -140,16 +175,56 @@ impl Repo {
         Ok(pattern)
     }
 
+    /// Narrows the scope. An include matching `arg` (as typed, or as the pattern `track` would
+    /// make of it) is removed; otherwise the path is excluded.
+    pub fn untrack(&self, arg: &str) -> Result<Untrack> {
+        let pattern = self.pattern_for(arg)?;
+        let mut config = self.config()?;
+        let include = &mut config.scope.include;
+        let result = match include.iter().position(|p| p == arg || *p == pattern) {
+            Some(i) => Untrack::Removed(include.remove(i)),
+            None => {
+                if !config.scope.exclude.contains(&pattern) {
+                    config.scope.exclude.push(pattern.clone());
+                }
+                Untrack::Excluded(pattern)
+            }
+        };
+        config.save(&self.config_path())?;
+        Ok(result)
+    }
+
+    /// A path relative to the caller's directory, as a literal repo-relative scope pattern.
+    fn pattern_for(&self, path: &str) -> Result<String> {
+        let prefix = self.git.run(&["rev-parse", "--show-prefix"])?;
+        let rel = format!("{prefix}{}", path.trim_start_matches("./"));
+        let rel = rel.trim_end_matches('/');
+        let mut pattern = globset::escape(rel);
+        if self.top.join(rel).is_dir() {
+            pattern.push_str("/**");
+        }
+        Ok(pattern)
+    }
+
     /// In-scope files present on disk, repo-relative and sorted.
     pub fn files(&self) -> Result<Vec<String>> {
-        let matcher = Matcher::new(&self.config()?.scope)?;
-        let out = self.root.run(&[
+        let scope = self.config()?.scope;
+        let matcher = Matcher::new(&scope)?;
+        let mut args = vec![
+            "--literal-pathspecs",
             "ls-files",
             "-z",
             "--cached",
             "--others",
             "--exclude-standard",
-        ])?;
+        ];
+        // Untracked-file discovery walks the tree; limiting it to the scope's roots is the win.
+        let roots = scope.roots();
+        if let Some(roots) = &roots {
+            args.push("--");
+            args.extend(roots.iter().map(String::as_str));
+        }
+        let out = self.root.run(&args)?;
         // A set: conflicted files appear once per stage.
         let files: BTreeSet<&str> = out
             .split('\0')
@@ -340,9 +415,14 @@ impl Repo {
         Ok(())
     }
 
+    /// A snapshot id, or `@` for the latest (`@~1` the one before, and so on).
     fn resolve(&self, id: &str) -> Result<String> {
+        let rev = match id.strip_prefix('@') {
+            Some(rest) => format!("{}{rest}", self.snapshot_ref),
+            None => id.to_string(),
+        };
         self.git
-            .try_run(&["rev-parse", "--verify", "-q", &format!("{id}^{{commit}}")])?
+            .try_run(&["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")])?
             .with_context(|| format!("unknown snapshot: {id}"))
     }
 

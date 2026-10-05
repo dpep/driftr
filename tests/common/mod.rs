@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Runs git isolated from the user's config and any inherited repo pointers.
 pub fn git(dir: &Path, args: &[&str]) -> String {
@@ -44,4 +45,47 @@ pub fn init_repo(dir: &Path) {
     write(dir, "README.md", "v1\n");
     git(dir, &["add", "."]);
     git(dir, &["commit", "-q", "-m", "init"]);
+}
+
+pub struct Run {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn driftr(dir: &Path, args: &[&str]) -> Run {
+    driftr_with(dir, args, None, &[])
+}
+
+/// Runs the binary with HOME at `dir` and DRIFTR_HOME pinned beneath it, so no test
+/// can reach the real data dir; `env` overrides either.
+pub fn driftr_with(dir: &Path, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> Run {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_driftr"))
+        .current_dir(dir)
+        .args(args)
+        .env("HOME", dir)
+        .env("DRIFTR_HOME", dir.join(".driftr-data"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if let Some(input) = stdin {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    Run {
+        code: out.status.code().unwrap(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
 }

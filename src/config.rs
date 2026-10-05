@@ -47,6 +47,26 @@ impl Config {
     }
 }
 
+impl Scope {
+    /// Literal paths every include lies under, so listing can skip the rest of the tree.
+    /// `None` when some include could match anywhere (`**/*.md`, a regex).
+    pub fn roots(&self) -> Option<Vec<String>> {
+        self.include.iter().map(|p| literal_root(p)).collect()
+    }
+}
+
+/// The longest literal directory prefix of a glob, or the whole path if it has no glob syntax.
+fn literal_root(pattern: &str) -> Option<String> {
+    if pattern.starts_with("re:") {
+        return None;
+    }
+    let root = match pattern.find(['*', '?', '[', '{', '\\']) {
+        None => pattern,
+        Some(i) => pattern[..i].rsplit_once('/')?.0,
+    };
+    (!root.is_empty()).then(|| root.to_string())
+}
+
 pub struct Matcher {
     include: Patterns,
     exclude: Patterns,
@@ -136,6 +156,22 @@ mod tests {
         assert!(m.matches("skills/git/config.toml"));
         assert!(!m.matches("skills/git/draft.md"));
         assert!(!m.matches("other/SKILL.md"));
+    }
+
+    #[test]
+    fn roots_are_the_literal_prefixes_of_every_include() {
+        let scope = |include: &[&str]| Scope {
+            include: include.iter().map(|s| s.to_string()).collect(),
+            exclude: vec![],
+        };
+        assert_eq!(
+            scope(&["CLAUDE.md", "skills/**", "docs/a/*.md"]).roots(),
+            Some(vec!["CLAUDE.md".into(), "skills".into(), "docs/a".into()])
+        );
+        assert_eq!(scope(&["skills/**", "**/*.md"]).roots(), None);
+        assert_eq!(scope(&["*.txt"]).roots(), None);
+        assert_eq!(scope(&["re:^docs/"]).roots(), None);
+        assert_eq!(scope(&[r"weird\[1\].txt"]).roots(), None);
     }
 
     #[test]

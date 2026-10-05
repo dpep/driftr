@@ -10,7 +10,7 @@ use serde_json::json;
 
 use driftr::output::Format;
 use driftr::watch::Settle;
-use driftr::{Repo, SnapshotOpts, hook, status};
+use driftr::{Repo, SnapshotOpts, Untrack, hook, status};
 
 const EXIT_CODES: &str = "\
 Exit codes:
@@ -35,10 +35,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Opt this repo in, writing the default scope config
+    /// Opt this repo in; outside git, track the directory via a store kept elsewhere
     Init,
-    /// Add a file or directory to the snapshot scope
-    Track { path: String },
+    /// Add files or directories to the snapshot scope
+    Track {
+        #[arg(required = true)]
+        paths: Vec<String>,
+    },
+    /// Narrow the scope: drop a matching include, else exclude the path
+    Untrack {
+        #[arg(required = true)]
+        paths: Vec<String>,
+    },
     /// List the files currently in scope
     Files,
     /// Show scope, snapshot counts, and whether the Claude Code hook is wired up
@@ -58,7 +66,7 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
-    /// Diff a snapshot against the current in-scope files
+    /// Diff a snapshot (`@` = latest, `@~1` the one before) against the current in-scope files
     Diff { id: String, path: Option<String> },
     /// Restore a path from a snapshot (what it overwrites is snapshotted first)
     Restore {
@@ -111,21 +119,35 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command, fmt: Format) -> Result<ExitCode> {
+    if let Command::Init = command {
+        let (repo, created) = Repo::init_dir(Path::new("."))?;
+        let config = repo.config_path().display().to_string();
+        if !created {
+            eprintln!("already initialized");
+        }
+        let value = json!({ "config": config, "store": repo.git_dir(), "created": created });
+        fmt.one(&value, |_| Some(config.clone()))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let repo = Repo::open(Path::new("."))?;
     match command {
-        Command::Init => {
-            let created = repo.init()?;
-            let config = repo.config_path().display().to_string();
-            if !created {
-                eprintln!("already initialized");
-            }
-            fmt.one(&json!({ "config": config, "created": created }), |_| {
-                Some(config.clone())
-            })?;
+        Command::Init => unreachable!("handled before opening a repo"),
+        Command::Track { paths } => {
+            let patterns = paths
+                .iter()
+                .map(|p| repo.track(p))
+                .collect::<Result<Vec<_>>>()?;
+            fmt.rows(&patterns, |p| p.clone())?;
         }
-        Command::Track { path } => {
-            let pattern = repo.track(&path)?;
-            fmt.one(&json!({ "pattern": pattern }), |_| Some(pattern.clone()))?;
+        Command::Untrack { paths } => {
+            let changes = paths
+                .iter()
+                .map(|p| repo.untrack(p))
+                .collect::<Result<Vec<_>>>()?;
+            fmt.rows(&changes, |c| match c {
+                Untrack::Removed(p) => format!("removed {p}"),
+                Untrack::Excluded(p) => format!("excluded {p}"),
+            })?;
         }
         Command::Files => {
             let files = repo.files()?;
@@ -204,6 +226,7 @@ fn status_text(s: &status::Status) -> String {
     };
     [
         ("repo", s.repo.clone()),
+        ("store", s.store.clone()),
         ("enabled", s.enabled.to_string()),
         ("config", s.config.clone()),
         ("include", s.include.join(" ")),

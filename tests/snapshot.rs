@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use common::{git, init_repo, read, write};
-use driftr::{Repo, SnapshotOpts};
+use driftr::{Repo, SnapshotOpts, Untrack};
 use tempfile::TempDir;
 
 /// A repo with one commit containing README.md.
@@ -321,9 +321,10 @@ fn hook_input(dir: &Path, event: &str) -> String {
 fn hook_ignores_repos_that_have_not_opted_in() {
     let (tmp, repo) = repo();
     write(tmp.path(), "a.md", "1\n");
-    assert_eq!(
-        driftr::hook::run(&hook_input(tmp.path(), "Stop")).unwrap(),
-        None
+    assert!(
+        driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+            .unwrap()
+            .is_empty()
     );
     assert_eq!(repo.last().unwrap(), None);
 }
@@ -331,9 +332,10 @@ fn hook_ignores_repos_that_have_not_opted_in() {
 #[test]
 fn hook_ignores_directories_outside_git() {
     let tmp = TempDir::new().unwrap();
-    assert_eq!(
-        driftr::hook::run(&hook_input(tmp.path(), "Stop")).unwrap(),
-        None
+    assert!(
+        driftr::hook::run(&hook_input(tmp.path(), "Stop"))
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -343,10 +345,10 @@ fn hook_snapshots_with_session_and_records_the_event() {
     repo.init().unwrap();
     write(tmp.path(), "a.md", "1\n");
 
-    let id = driftr::hook::run(&hook_input(tmp.path(), "Stop"))
-        .unwrap()
-        .unwrap();
-    let body = git(tmp.path(), &["log", "-1", "--format=%B", &id]);
+    let [id] = &driftr::hook::run(&hook_input(tmp.path(), "Stop")).unwrap()[..] else {
+        panic!("expected one snapshot");
+    };
+    let body = git(tmp.path(), &["log", "-1", "--format=%B", id]);
     assert!(!body.contains("Driftr-Agent"), "{body}");
     for trailer in ["Driftr-Session: sess-1", "Driftr-Event: Stop"] {
         assert!(body.contains(trailer), "{body}");
@@ -357,6 +359,42 @@ fn hook_snapshots_with_session_and_records_the_event() {
     assert_eq!(event["event"], "Stop");
     assert_eq!(event["session"], "sess-1");
     assert_eq!(event["snapshot"], id.as_str());
+}
+
+#[test]
+fn hook_snapshots_the_repo_of_the_file_being_edited() {
+    let (tmp, repo) = repo();
+    repo.init().unwrap();
+    write(tmp.path(), "skills/new.md", "draft\n");
+    let elsewhere = TempDir::new().unwrap();
+    let payload = serde_json::json!({
+        "session_id": "sess-2",
+        "hook_event_name": "PostToolUse",
+        "cwd": elsewhere.path(),
+        "tool_name": "Write",
+        "tool_input": {"file_path": tmp.path().join("skills/new.md")},
+    });
+    let taken = driftr::hook::run(&payload.to_string()).unwrap();
+    assert_eq!(taken.len(), 1);
+    assert_eq!(repo.last().unwrap().as_ref(), taken.first());
+
+    // A file in the cwd repo is snapshotted once, not twice.
+    write(tmp.path(), "skills/new.md", "edited\n");
+    let same = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "cwd": tmp.path(),
+        "tool_input": {"file_path": tmp.path().join("skills/new.md")},
+    });
+    assert_eq!(driftr::hook::run(&same.to_string()).unwrap().len(), 1);
+
+    // Before a Write creates a file in a new directory, its nearest existing ancestor counts.
+    let pre = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "cwd": elsewhere.path(),
+        "tool_input": {"file_path": tmp.path().join("brand/new/dir/x.md")},
+    });
+    write(tmp.path(), "skills/new.md", "again\n");
+    assert_eq!(driftr::hook::run(&pre.to_string()).unwrap().len(), 1);
 }
 
 #[test]
@@ -391,4 +429,43 @@ fn linked_worktree_snapshots_live_under_a_shared_namespace() {
     let linked = Repo::open(&tmp.path().join("wt")).unwrap();
     assert_eq!(main.snapshot_ref(), "refs/driftr/snapshots");
     assert_eq!(linked.snapshot_ref(), "refs/driftr/worktrees/wt/snapshots");
+}
+
+#[test]
+fn untrack_removes_a_matching_include_else_excludes() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "docs/a.md", "a\n");
+    write(tmp.path(), "notes.txt", "n\n");
+    repo.track("notes.txt").unwrap();
+
+    assert_eq!(
+        repo.untrack("**/*.md").unwrap(),
+        Untrack::Removed("**/*.md".into())
+    );
+    assert_eq!(repo.files().unwrap(), ["notes.txt"]);
+
+    repo.track("docs").unwrap();
+    assert_eq!(
+        repo.untrack("docs/a.md").unwrap(),
+        Untrack::Excluded("docs/a.md".into())
+    );
+    assert_eq!(repo.files().unwrap(), ["notes.txt"]);
+    assert_eq!(
+        repo.untrack("notes.txt").unwrap(),
+        Untrack::Removed("notes.txt".into())
+    );
+}
+
+#[test]
+fn at_names_the_latest_snapshot_and_its_ancestors() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "README.md", "v2\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "README.md", "v3\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "README.md", "v4\n");
+
+    assert!(repo.diff("@", None).unwrap().contains("-v3\n+v4"));
+    repo.restore("@~1", "README.md").unwrap();
+    assert_eq!(read(tmp.path(), "README.md"), "v2\n");
 }

@@ -7,8 +7,9 @@ Status: spike. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/decis
 ## Usage
 
 ```
-driftr init                               # opt this repo in (writes the default scope config)
-driftr track <path>                       # add a file or directory to the scope
+driftr init                               # opt this repo (or plain directory) in
+driftr track <path>...                    # add files or directories to the scope
+driftr untrack <path|pattern>...          # drop a matching include, else exclude the path
 driftr files                              # what's in scope right now
 driftr status                             # scope, snapshot count, whether the hook is wired up
 
@@ -18,6 +19,8 @@ driftr diff <id> [path]                   # snapshot vs. the current in-scope fi
 driftr restore <path> --at <id> [--dry-run]   # snapshots what it overwrites first
 driftr watch [--idle 30] [--max 300]      # poll; snapshot when the tree settles
 ```
+
+Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it.
 
 Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line). Exit codes: `0` success, `1` empty result (`log`, `files`) or not enabled (`status`), `2` error, `64` usage error.
 
@@ -38,22 +41,33 @@ include = ["**/*.md", "notes.txt", "re:^skills/.*\\.toml$"]
 exclude = ["**/node_modules/**"]
 ```
 
-Patterns match repo-relative paths. Globs are gitignore-like (`*` stays within a directory, `**` crosses them); a `re:` prefix makes a regex. `driftr track` appends to `include`.
+Patterns match repo-relative paths. Globs are gitignore-like (`*` stays within a directory, `**` crosses them); a `re:` prefix makes a regex. `driftr track` appends to `include`; `driftr untrack` removes a matching include or adds an exclude. To replace the default with an allowlist:
+
+```
+driftr untrack '**/*.md'
+driftr track CLAUDE.md skills docs
+```
+
+## Directories that aren't git repos
+
+`driftr init` outside any git repo tracks the directory through a store kept elsewhere, `~/.local/share/driftr/dirs/<escaped path>.git` (or under `$DRIFTR_HOME` / `$XDG_DATA_HOME`), so the directory gains no `.git`. Everything else works the same, from any subdirectory. A git repo nested inside wins for its own files. `init` refuses `/` and `$HOME`, which would opt in everything beneath them.
 
 ## Claude Code
 
-`driftr hook` reads Claude Code's hook JSON on stdin and snapshots at turn boundaries, tagged `Driftr-Session` and `Driftr-Event`. It acts only in repos where you've run `driftr init`, never writes stdout, and always exits 0. In `~/.claude/settings.json`:
+`driftr hook` reads Claude Code's hook JSON on stdin and snapshots the session's cwd repo plus the repo of any `file_path` the tool is touching, tagged `Driftr-Session` and `Driftr-Event`. It acts only where you've run `driftr init`, never writes stdout, and always exits 0. In `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "driftr hook" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "driftr hook" }] }]
+    "Stop": [{ "hooks": [{ "type": "command", "command": "driftr hook" }] }],
+    "PreToolUse": [{ "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "driftr hook" }] }],
+    "PostToolUse": [{ "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "driftr hook" }] }]
   }
 }
 ```
 
-The `UserPromptSubmit` snapshot captures edits made between turns, and `Stop` captures the turn itself. Each event is also appended to `.git/driftr/events.jsonl`, including the `file_path` of tool calls when wired to `PostToolUse`.
+`UserPromptSubmit` captures edits made between turns and `Stop` the turn itself. The tool events bracket each file edit, including edits to tracked directories outside the session's cwd, such as `~/.claude/skills` edited from a project session. Each event is also appended to `<git dir>/driftr/events.jsonl`.
 
 ## Build
 

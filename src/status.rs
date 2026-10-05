@@ -9,6 +9,8 @@ use crate::snapshot::Repo;
 #[derive(Debug, Serialize)]
 pub struct Status {
     pub repo: String,
+    /// Where snapshots live: the repo's git dir, or an external store for a non-git directory.
+    pub store: String,
     /// Opted in: a config exists, so hooks act here.
     pub enabled: bool,
     pub config: String,
@@ -28,6 +30,7 @@ pub fn status(repo: &Repo) -> Result<Status> {
     let home = std::env::var_os("HOME").map(|h| fs::canonicalize(&h).unwrap_or(h.into()));
     Ok(Status {
         repo: tilde(repo.top(), home.as_deref()),
+        store: tilde(repo.git_dir(), home.as_deref()),
         enabled: repo.enabled(),
         config: tilde(&repo.config_path(), home.as_deref()),
         include: config.scope.include,

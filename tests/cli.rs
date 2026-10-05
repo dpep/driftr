@@ -1,52 +1,8 @@
 mod common;
 
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
-
-use common::{git, init_repo, read, write};
+use common::{driftr, driftr_with, git, init_repo, read, write};
 use serde_json::Value;
 use tempfile::TempDir;
-
-struct Run {
-    code: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn driftr(dir: &Path, args: &[&str]) -> Run {
-    driftr_with(dir, args, None, &[])
-}
-
-fn driftr_with(dir: &Path, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> Run {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_driftr"))
-        .current_dir(dir)
-        .args(args)
-        .env("HOME", dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        .envs(env.iter().copied())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    if let Some(input) = stdin {
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-    }
-    let out = child.wait_with_output().unwrap();
-    Run {
-        code: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8(out.stderr).unwrap(),
-    }
-}
 
 fn repo() -> TempDir {
     let tmp = TempDir::new().unwrap();
@@ -60,7 +16,8 @@ fn help_lists_every_subcommand_and_the_exit_codes() {
     let help = driftr(tmp.path(), &["--help"]);
     assert_eq!(help.code, 0);
     for cmd in [
-        "init", "track", "files", "status", "snapshot", "log", "diff", "restore", "watch", "hook",
+        "init", "track", "untrack", "files", "status", "snapshot", "log", "diff", "restore",
+        "watch", "hook",
     ] {
         assert!(help.stdout.contains(&format!("  {cmd} ")), "{cmd} missing");
     }

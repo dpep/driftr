@@ -9,6 +9,8 @@ use anyhow::{Context, Result, bail};
 pub struct Git {
     dir: PathBuf,
     index: Option<PathBuf>,
+    /// Explicit (git dir, work tree), for a directory whose repo lives elsewhere.
+    repo: Option<(PathBuf, PathBuf)>,
 }
 
 impl Git {
@@ -16,14 +18,31 @@ impl Git {
         Git {
             dir: dir.to_path_buf(),
             index: None,
+            repo: None,
         }
     }
 
     /// Same repo, but staging into a private index so the user's is never touched.
     pub fn with_index(&self, index: &Path) -> Git {
         Git {
-            dir: self.dir.clone(),
             index: Some(index.to_path_buf()),
+            ..self.clone()
+        }
+    }
+
+    /// Same repo, run from another directory.
+    pub fn at(&self, dir: &Path) -> Git {
+        Git {
+            dir: dir.to_path_buf(),
+            ..self.clone()
+        }
+    }
+
+    /// Same directory, backed by a git dir outside it.
+    pub fn with_repo(&self, git_dir: &Path, work_tree: &Path) -> Git {
+        Git {
+            repo: Some((git_dir.to_path_buf(), work_tree.to_path_buf())),
+            ..self.clone()
         }
     }
 
@@ -64,6 +83,9 @@ impl Git {
         // The repo is chosen by `dir`; an inherited GIT_DIR (e.g. under `rebase --exec`) must not redirect it.
         for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
             cmd.env_remove(var);
+        }
+        if let Some((git_dir, work_tree)) = &self.repo {
+            cmd.env("GIT_DIR", git_dir).env("GIT_WORK_TREE", work_tree);
         }
         if let Some(index) = &self.index {
             cmd.env("GIT_INDEX_FILE", index);
