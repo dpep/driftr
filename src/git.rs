@@ -1,0 +1,84 @@
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+use anyhow::{Context, Result, bail};
+
+/// Thin wrapper over the git CLI, run from a fixed directory.
+#[derive(Clone, Debug)]
+pub struct Git {
+    dir: PathBuf,
+    index: Option<PathBuf>,
+}
+
+impl Git {
+    pub fn new(dir: &Path) -> Git {
+        Git {
+            dir: dir.to_path_buf(),
+            index: None,
+        }
+    }
+
+    /// Same repo, but staging into a private index so the user's is never touched.
+    pub fn with_index(&self, index: &Path) -> Git {
+        Git {
+            dir: self.dir.clone(),
+            index: Some(index.to_path_buf()),
+        }
+    }
+
+    /// Runs git, returning trimmed stdout; a non-zero exit is an error carrying stderr.
+    pub fn run(&self, args: &[&str]) -> Result<String> {
+        Self::check(args, self.output(args)?)
+    }
+
+    /// Runs git where failure is an expected answer (e.g. `rev-parse --verify`).
+    pub fn try_run(&self, args: &[&str]) -> Result<Option<String>> {
+        let out = self.output(args)?;
+        Ok(out
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string()))
+    }
+
+    /// Like `run`, feeding `input` on stdin.
+    pub fn run_input(&self, args: &[&str], input: &[u8]) -> Result<String> {
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("failed to run git")?;
+        child.stdin.take().unwrap().write_all(input)?;
+        Self::check(args, child.wait_with_output()?)
+    }
+
+    fn output(&self, args: &[&str]) -> Result<Output> {
+        self.command(args).output().context("failed to run git")
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&self.dir).args(args);
+        // The repo is chosen by `dir`; an inherited GIT_DIR (e.g. under `rebase --exec`) must not redirect it.
+        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+            cmd.env_remove(var);
+        }
+        if let Some(index) = &self.index {
+            cmd.env("GIT_INDEX_FILE", index);
+        }
+        cmd
+    }
+
+    fn check(args: &[&str], out: Output) -> Result<String> {
+        if !out.status.success() {
+            bail!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    }
+}

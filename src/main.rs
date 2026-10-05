@@ -1,0 +1,240 @@
+use std::io::{IsTerminal, Read};
+use std::path::Path;
+use std::process::ExitCode;
+use std::thread;
+use std::time::Duration;
+
+use anyhow::{Result, bail};
+use clap::{Parser, Subcommand};
+use serde_json::json;
+
+use driftr::output::Format;
+use driftr::watch::Settle;
+use driftr::{Repo, SnapshotOpts, hook, status};
+
+const EXIT_CODES: &str = "\
+Exit codes:
+  0   success
+  1   empty result (log, files); not enabled (status)
+  2   error
+  64  usage error";
+
+/// Automatic, recoverable working history, stored in plain git.
+#[derive(Parser)]
+#[command(version, after_help = EXIT_CODES)]
+struct Cli {
+    /// Pretty JSON
+    #[arg(short = 'j', long, global = true)]
+    json: bool,
+    /// One compact JSON object per line
+    #[arg(short = 'J', long, global = true, conflicts_with = "json")]
+    ndjson: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Opt this repo in, writing the default scope config
+    Init,
+    /// Add a file or directory to the snapshot scope
+    Track { path: String },
+    /// List the files currently in scope
+    Files,
+    /// Show scope, snapshot counts, and whether the Claude Code hook is wired up
+    Status,
+    /// Snapshot the in-scope files; prints the snapshot id, or nothing if unchanged
+    Snapshot {
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Agent or editing session responsible for these changes
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List snapshots, newest first
+    Log {
+        path: Option<String>,
+        /// Only snapshots tagged with this session
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Diff a snapshot against the current in-scope files
+    Diff { id: String, path: Option<String> },
+    /// Restore a path from a snapshot (what it overwrites is snapshotted first)
+    Restore {
+        path: String,
+        #[arg(long)]
+        at: String,
+        /// Print the diff the restore would apply, and change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Poll the working tree and snapshot whenever it settles (-j streams like -J)
+    Watch {
+        /// Seconds between polls; a tree unchanged across one poll has settled
+        #[arg(long, default_value_t = 30)]
+        idle: u64,
+        /// Snapshot at least this often (seconds) while changes keep coming
+        #[arg(long, default_value_t = 300)]
+        max: u64,
+    },
+    /// Claude Code hook: reads the hook JSON on stdin and snapshots in opted-in repos
+    Hook,
+}
+
+fn main() -> ExitCode {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let _ = e.print();
+            return ExitCode::from(if e.use_stderr() { 64 } else { 0 });
+        }
+    };
+    let fmt = match (cli.json, cli.ndjson) {
+        (true, _) => Format::Json,
+        (_, true) => Format::Ndjson,
+        _ => Format::Text,
+    };
+    if let Command::Hook = cli.command {
+        return run_hook();
+    }
+    match run(cli.command, fmt) {
+        Ok(code) => code,
+        Err(e) => {
+            match fmt {
+                Format::Text => eprintln!("driftr: {e:#}"),
+                _ => eprintln!("{}", json!({ "error": format!("{e:#}") })),
+            }
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run(command: Command, fmt: Format) -> Result<ExitCode> {
+    let repo = Repo::open(Path::new("."))?;
+    match command {
+        Command::Init => {
+            let created = repo.init()?;
+            let config = repo.config_path().display().to_string();
+            if !created {
+                eprintln!("already initialized");
+            }
+            fmt.one(&json!({ "config": config, "created": created }), |_| {
+                Some(config.clone())
+            })?;
+        }
+        Command::Track { path } => {
+            let pattern = repo.track(&path)?;
+            fmt.one(&json!({ "pattern": pattern }), |_| Some(pattern.clone()))?;
+        }
+        Command::Files => {
+            let files = repo.files()?;
+            fmt.rows(&files, |f| f.clone())?;
+            return Ok(found(!files.is_empty()));
+        }
+        Command::Status => {
+            let s = status::status(&repo)?;
+            fmt.one(&s, |s| Some(status_text(s)))?;
+            return Ok(found(s.enabled));
+        }
+        Command::Snapshot { message, session } => {
+            let mut opts = session
+                .as_deref()
+                .map(SnapshotOpts::session)
+                .unwrap_or_default();
+            opts.message = message;
+            let id = repo.snapshot(&opts)?;
+            fmt.one(&json!({ "snapshot": id }), |_| id.clone())?;
+        }
+        Command::Log { path, session } => {
+            let entries = repo.log(path.as_deref(), session.as_deref())?;
+            fmt.rows(&entries, |e| format!("{}\t{}\t{}", e.id, e.time, e.subject))?;
+            return Ok(found(!entries.is_empty()));
+        }
+        Command::Diff { id, path } => {
+            let diff = repo.diff(&id, path.as_deref())?;
+            fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
+        }
+        Command::Restore { path, at, dry_run } => {
+            if dry_run {
+                let diff = repo.preview_restore(&at, &path)?;
+                fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
+            } else {
+                let safety = repo.restore(&at, &path)?;
+                if let Some(s) = &safety {
+                    eprintln!("previous state saved as {s}");
+                }
+                let value = json!({ "restored": path, "from": at, "safety": safety });
+                fmt.one(&value, |_| None)?;
+            }
+        }
+        Command::Watch { idle, max } => {
+            let fmt = fmt.streaming();
+            let idle = idle.max(1);
+            let mut settle = Settle::new((max / idle) as u32);
+            loop {
+                let tree = repo.stage()?;
+                if settle.observe(tree.clone())
+                    && let Some(id) = repo.commit(&tree, &SnapshotOpts::default())?
+                {
+                    fmt.one(&json!({ "snapshot": id }), |_| Some(id.clone()))?;
+                }
+                thread::sleep(Duration::from_secs(idle));
+            }
+        }
+        Command::Hook => unreachable!("handled before opening a repo"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// grep's convention for queries: 1 means "nothing".
+fn found(any: bool) -> ExitCode {
+    if any {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn status_text(s: &status::Status) -> String {
+    let hooks = if s.hooks.is_empty() {
+        "not installed".to_string()
+    } else {
+        s.hooks.join(", ")
+    };
+    [
+        ("repo", s.repo.clone()),
+        ("enabled", s.enabled.to_string()),
+        ("config", s.config.clone()),
+        ("include", s.include.join(" ")),
+        ("exclude", s.exclude.join(" ")),
+        ("files", s.files.to_string()),
+        (
+            "snapshots",
+            format!("{} on {}", s.snapshots, s.snapshot_ref),
+        ),
+        ("last", s.last.clone().unwrap_or_else(|| "-".into())),
+        ("hook", hooks),
+    ]
+    .iter()
+    .map(|(k, v)| format!("{k:<10} {v}"))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// Always exits 0 and never writes stdout: Claude Code parses hook stdout, and a
+/// failing hook must not block or interrupt the agent.
+fn run_hook() -> ExitCode {
+    let result = (|| {
+        if std::io::stdin().is_terminal() {
+            bail!("expects Claude Code's hook JSON on stdin");
+        }
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input)?;
+        hook::run(&input)
+    })();
+    if let Err(e) = result {
+        eprintln!("driftr hook: {e:#}");
+    }
+    ExitCode::SUCCESS
+}

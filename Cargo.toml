@@ -1,0 +1,20 @@
+[package]
+name = "driftr"
+version = "0.1.0"
+edition = "2024"
+description = "Automatic, recoverable working history for AI-assisted development, stored in plain git."
+license = "MIT"
+repository = "https://github.com/dpep/driftr"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+globset = "0.4.20"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.6"
+
+[dev-dependencies]
+serde_json = "1.0.151"
+tempfile = "3"
