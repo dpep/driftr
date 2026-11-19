@@ -267,6 +267,21 @@ fn at_n_counts_versions_of_the_path_when_one_is_given() {
 }
 
 #[test]
+fn show_prints_a_file_as_it_was() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "a.md", "v1\n");
+    let v1 = snap(&repo).unwrap();
+    write(tmp.path(), "a.md", "v2\n");
+    snap(&repo).unwrap();
+
+    assert_eq!(repo.show(&v1, "a.md").unwrap(), "v1");
+    assert_eq!(repo.show("@~1", "a.md").unwrap(), "v1");
+    assert_eq!(repo.show("@", "a.md").unwrap(), "v2");
+    let err = repo.show(&v1, "nope.md").unwrap_err();
+    assert!(err.to_string().contains("does not exist"), "{err}");
+}
+
+#[test]
 fn restore_rejects_a_path_missing_from_the_snapshot() {
     let (tmp, repo) = repo();
     write(tmp.path(), "a.md", "1\n");

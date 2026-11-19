@@ -77,6 +77,13 @@ enum Command {
         /// File or directory, relative to the current directory
         path: Option<String>,
     },
+    /// Print a file as it was in a snapshot
+    Show {
+        /// Snapshot id from `driftr log`, or `@~N` (the path's Nth previous version)
+        id: String,
+        /// File, relative to the current directory
+        path: String,
+    },
     /// Restore a path from a snapshot (what it overwrites is snapshotted first)
     Restore {
         /// File or directory, relative to the current directory. A directory is restored
@@ -231,6 +238,13 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
         Command::Diff { id, path } => {
             let diff = repo.diff(&id, path.as_deref())?;
             fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
+        }
+        Command::Show { id, path } => {
+            let content = repo.show(&id, &path)?;
+            fmt.one(
+                &json!({ "id": id, "path": path, "content": content }),
+                |_| Some(content.clone()),
+            )?;
         }
         Command::Restore { path, at, dry_run } => {
             if dry_run {

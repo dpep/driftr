@@ -448,6 +448,12 @@ impl Repo {
         })
     }
 
+    /// `path` as it was in snapshot `id` (a directory lists its entries).
+    pub fn show(&self, id: &str, path: &str) -> Result<String> {
+        let commit = self.resolve_path(id, path)?;
+        self.git.run(&["show", &format!("{commit}:./{path}")])
+    }
+
     /// Restores `path` from snapshot `id`, first snapshotting what it overwrites.
     /// In-scope files added since the snapshot are removed, as the dry run shows, and the
     /// result is snapshotted. Returns the safety snapshot, if the working tree had unsaved
