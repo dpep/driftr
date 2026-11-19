@@ -434,7 +434,10 @@ impl Repo {
 
     /// Diff from a snapshot to the current in-scope files, including untracked ones.
     pub fn diff(&self, id: &str, path: Option<&str>) -> Result<String> {
-        let commit = self.resolve(id)?;
+        let commit = match path {
+            Some(path) => self.resolve_for(id, path)?,
+            None => self.resolve(id)?,
+        };
         self.healing(|| {
             let tree = self.stage_once()?;
             let mut args = vec!["diff", &commit, &tree];
@@ -509,7 +512,7 @@ impl Repo {
 
     /// Resolves `id`, requiring `path` (relative to the cwd) to exist in it.
     fn resolve_path(&self, id: &str, path: &str) -> Result<String> {
-        let commit = self.resolve(id)?;
+        let commit = self.resolve_for(id, path)?;
         // `./` makes the path relative to the cwd rather than the repo root.
         let spec = format!("{commit}:./{path}");
         if self.git.try_run(&["cat-file", "-e", &spec])?.is_none() {
@@ -521,6 +524,37 @@ impl Repo {
     /// Appends one line to the shared event log.
     pub fn record_event(&self, line: &str) -> Result<()> {
         append_event(&self.shared, line)
+    }
+
+    /// Like `resolve`, but `@` and `@~N` count only the snapshots that changed `path`, so
+    /// `@~1` is that path's previous version.
+    fn resolve_for(&self, id: &str, path: &str) -> Result<String> {
+        let n = match id {
+            "@" => 0,
+            "@~" => 1,
+            _ => match id.strip_prefix("@~").and_then(|n| n.parse::<usize>().ok()) {
+                Some(n) => n,
+                None => return self.resolve(id),
+            },
+        };
+        let count = (n + 1).to_string();
+        let out = self.git.run(&[
+            "rev-list",
+            "--max-count",
+            &count,
+            &self.snapshot_ref,
+            "--",
+            path,
+        ])?;
+        let versions: Vec<&str> = out.lines().collect();
+        match versions.get(n) {
+            Some(commit) => Ok(commit.to_string()),
+            None => bail!(
+                "{path} has {} version{} in the snapshots, so there's no {id}",
+                versions.len(),
+                if versions.len() == 1 { "" } else { "s" }
+            ),
+        }
     }
 
     /// A snapshot id, or `@` for the latest (`@~1` the one before, and so on).

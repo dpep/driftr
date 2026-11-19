@@ -70,13 +70,20 @@ enum Command {
         session: Option<String>,
     },
     /// Diff a snapshot (`@` = latest, `@~1` the one before) against the current in-scope files
-    Diff { id: String, path: Option<String> },
+    Diff {
+        /// Snapshot id from `driftr log`, or `@~N`; with a path, `@~N` is that path's Nth
+        /// previous version
+        id: String,
+        /// File or directory, relative to the current directory
+        path: Option<String>,
+    },
     /// Restore a path from a snapshot (what it overwrites is snapshotted first)
     Restore {
         /// File or directory, relative to the current directory. A directory is restored
         /// whole: in-scope files added since the snapshot are removed
         path: String,
-        /// Snapshot to restore from: an id from `driftr log`, or `@~N`
+        /// Snapshot to restore from: an id from `driftr log`, or `@~N` (the path's Nth
+        /// previous version)
         #[arg(long)]
         at: String,
         /// Print the diff the restore would apply, and change nothing

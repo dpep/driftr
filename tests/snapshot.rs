@@ -247,6 +247,26 @@ fn restoring_a_directory_matches_its_dry_run() {
 }
 
 #[test]
+fn at_n_counts_versions_of_the_path_when_one_is_given() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "a.md", "v1\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "a.md", "v2\n");
+    snap(&repo).unwrap();
+    write(tmp.path(), "b.md", "unrelated\n");
+    snap(&repo).unwrap();
+
+    let diff = repo.diff("@~1", Some("a.md")).unwrap();
+    assert!(diff.contains("-v1") && diff.contains("+v2"), "{diff}");
+    assert_eq!(repo.diff("@", Some("a.md")).unwrap(), "");
+    let err = repo.diff("@~5", Some("a.md")).unwrap_err();
+    assert!(err.to_string().contains("2 versions"), "{err}");
+
+    repo.restore("@~1", "a.md").unwrap();
+    assert_eq!(read(tmp.path(), "a.md"), "v1\n");
+}
+
+#[test]
 fn restore_rejects_a_path_missing_from_the_snapshot() {
     let (tmp, repo) = repo();
     write(tmp.path(), "a.md", "1\n");

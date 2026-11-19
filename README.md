@@ -22,7 +22,7 @@ driftr gc [--dry-run]                     # rewrite history to the current scope
 driftr report [--hours N]                 # what each hook costs and catches
 ```
 
-Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it.
+Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it. Given a path, they count that path's own versions: `driftr diff @~1 notes/plan.md` compares with the previous version of `plan.md`, however many other snapshots came between.
 
 Restoring a directory makes it match the snapshot: in-scope files added since are removed (out-of-scope files are never touched), exactly as `--dry-run` shows. The state it replaces is snapshotted first and the result after, so `@` is the restored state and the command prints the id to undo with.
 
