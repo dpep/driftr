@@ -15,11 +15,11 @@ use driftr::{Repo, SnapshotOpts, Untrack, hook, profile, registry, report, statu
 const EXIT_CODES: &str = "\
 Exit codes:
   0   success
-  1   empty result (log, files); not enabled (status)
+  1   empty result (log, files, report); not enabled (status)
   2   error
   64  usage error";
 
-/// Automatic, recoverable working history, stored in plain git.
+/// Automatic, recoverable working history for AI-assisted development, stored in plain git.
 #[derive(Parser)]
 #[command(version, after_help = EXIT_CODES)]
 struct Cli {
@@ -38,15 +38,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Opt this repo in; outside git, track the directory via a store kept elsewhere
+    /// Opt in to automatic snapshots (hooks, sweep); outside git, track the directory via a store kept elsewhere
     Init,
     /// Add files or directories to the snapshot scope
     Track {
+        /// Files or directories, relative to the current directory
         #[arg(required = true)]
         paths: Vec<String>,
     },
     /// Narrow the scope: drop a matching include, else exclude the path
     Untrack {
+        /// Files, directories, or include patterns (globs, `re:` regexes)
         #[arg(required = true)]
         paths: Vec<String>,
     },
@@ -56,6 +58,7 @@ enum Command {
     Status,
     /// Snapshot the in-scope files; prints the snapshot id, or nothing if unchanged
     Snapshot {
+        /// Snapshot subject (default: generated from the changes)
         #[arg(short, long)]
         message: Option<String>,
         /// Agent or editing session responsible for these changes
@@ -64,22 +67,23 @@ enum Command {
     },
     /// List snapshots, oldest first (newest last)
     Log {
+        /// Only snapshots that changed this file or directory
         path: Option<String>,
         /// Only snapshots tagged with this session
         #[arg(long)]
         session: Option<String>,
     },
-    /// Diff a snapshot (`@` = latest, `@~1` the one before) against the current in-scope files
+    /// Diff a snapshot against the current in-scope files
     Diff {
-        /// Snapshot id from `driftr log`, or `@~N`; with a path, `@~N` is that path's Nth
-        /// previous version
+        /// Snapshot id from `driftr log`, `@` (latest) or `@~N`; with a path, they count that
+        /// path's own versions
         id: String,
         /// File or directory, relative to the current directory
         path: Option<String>,
     },
     /// Print a file as it was in a snapshot
     Show {
-        /// Snapshot id from `driftr log`, or `@~N` (the path's Nth previous version)
+        /// Snapshot id from `driftr log`, `@` (latest) or `@~N`, counting the path's own versions
         id: String,
         /// File, relative to the current directory
         path: String,
@@ -89,8 +93,7 @@ enum Command {
         /// File or directory, relative to the current directory. A directory is restored
         /// whole: in-scope files added since the snapshot are removed
         path: String,
-        /// Snapshot to restore from: an id from `driftr log`, or `@~N` (the path's Nth
-        /// previous version)
+        /// Snapshot id from `driftr log`, `@` (latest) or `@~N`, counting the path's own versions
         #[arg(long)]
         at: String,
         /// Print the diff the restore would apply, and change nothing
@@ -237,7 +240,7 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
         }
         Command::Diff { id, path } => {
             let diff = repo.diff(&id, path.as_deref())?;
-            fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
+            fmt.one(&json!({ "diff": diff }), |_| non_empty(&diff))?;
         }
         Command::Show { id, path } => {
             let content = repo.show(&id, &path)?;
@@ -249,7 +252,7 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
         Command::Restore { path, at, dry_run } => {
             if dry_run {
                 let diff = repo.preview_restore(&at, &path)?;
-                fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
+                fmt.one(&json!({ "diff": diff }), |_| non_empty(&diff))?;
             } else {
                 let before = repo.last()?;
                 let safety = repo.restore(&at, &path)?;
@@ -388,4 +391,9 @@ fn run_hook(start: Instant, show_profile: bool) -> ExitCode {
         eprint!("{}", profile.render());
     }
     ExitCode::SUCCESS
+}
+
+/// Text output for a diff: nothing at all when it's empty, not a blank line.
+fn non_empty(text: &str) -> Option<String> {
+    (!text.is_empty()).then(|| text.to_string())
 }

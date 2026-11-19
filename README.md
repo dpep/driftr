@@ -27,7 +27,7 @@ Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before i
 
 Restoring a directory makes it match the snapshot: in-scope files added since are removed (out-of-scope files are never touched), exactly as `--dry-run` shows. The state it replaces is snapshotted first and the result after, so `@` is the restored state and the command prints the id to undo with.
 
-Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line), and `--profile` to print where the time went, per git command and phase, to stderr. Exit codes: `0` success, `1` empty result (`log`, `files`) or not enabled (`status`), `2` error, `64` usage error.
+Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line), and `--profile` to print where the time went, per git command and phase, to stderr. Exit codes: `0` success, `1` empty result (`log`, `files`, `report`) or not enabled (`status`), `2` error, `64` usage error.
 
 Snapshots are ordinary git commits on `refs/driftr/snapshots` (linked worktrees: `refs/driftr/worktrees/<name>/snapshots`), so plain git works on them too:
 

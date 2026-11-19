@@ -70,6 +70,16 @@ fn snapshot_json_reports_null_when_unchanged() {
 }
 
 #[test]
+fn diff_with_no_changes_prints_nothing() {
+    let tmp = repo();
+    write(tmp.path(), "a.md", "1\n");
+    driftr(tmp.path(), &["snapshot"]);
+    let run = driftr(tmp.path(), &["diff", "@"]);
+    assert_eq!(run.code, 0);
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
 fn errors_exit_2_with_json_on_stderr() {
     let tmp = repo();
     let run = driftr(tmp.path(), &["diff", "nope", "-j"]);
