@@ -1,3 +1,6 @@
+#[cfg(not(unix))]
+compile_error!("driftr supports Unix (macOS and Linux) only");
+
 pub mod config;
 pub mod external;
 pub mod fast;
