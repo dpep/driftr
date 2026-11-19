@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-18
 
 - Snapshot subjects say what happened: "Add", "Delete" or "Stop tracking" (a file that left the scope but is still on disk) when every change agrees, else "Update". Several files in one directory read "Add 5 files in notes/old/" or "Update a.md, b.md in notes/old/" instead of repeating long paths. Existing subjects are unchanged.
 - `driftr show <id> <path>` prints a file as it was, without finding the store for `git show`. `driftr show @~1 plan.md` is the previous version.
