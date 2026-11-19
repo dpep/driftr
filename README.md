@@ -16,13 +16,15 @@ driftr status                             # scope, snapshot count, whether the h
 driftr snapshot [-m msg] [--session id]   # prints the snapshot id, or nothing if unchanged
 driftr log [path] [--session id]          # snapshots, newest last
 driftr diff <id> [path]                   # snapshot vs. the current in-scope files
-driftr restore <path> --at <id> [--dry-run]   # snapshots what it overwrites first
+driftr restore <path> --at <id> [--dry-run]   # undoable: snapshots before and after
 driftr watch [--idle 30] [--max 300]      # poll; snapshot when the tree settles
 driftr gc [--dry-run]                     # rewrite history to the current scope
 driftr report [--hours N]                 # what each hook costs and catches
 ```
 
 Wherever a snapshot id is taken, `@` means the latest and `@~N` the Nth before it.
+
+Restoring a directory makes it match the snapshot: in-scope files added since are removed (out-of-scope files are never touched), exactly as `--dry-run` shows. The state it replaces is snapshotted first and the result after, so `@` is the restored state and the command prints the id to undo with.
 
 Every command takes `-j` (pretty JSON) or `-J` (one JSON object per line), and `--profile` to print where the time went, per git command and phase, to stderr. Exit codes: `0` success, `1` empty result (`log`, `files`) or not enabled (`status`), `2` error, `64` usage error.
 

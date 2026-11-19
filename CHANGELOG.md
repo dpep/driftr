@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `driftr restore` of a directory now removes in-scope files added since the snapshot, matching what `--dry-run` showed (it used to leave them). It snapshots the restored result, so `@` is no longer the state you just left, and prints the id to undo with.
 - `driftr log` lists oldest first, so the newest snapshot is last, next to your prompt. Scripts reading `log -j` should take the last row for the latest.
 - `.trash` directories are excluded by default. Existing configs keep their own `exclude` list: add `"**/.trash/**"` to it to match.
 - Driftr-owned stores pack themselves: after a snapshot, git packs the store in the background once 1000 loose objects pile up. Stores created earlier use git's default of 6700; run `git --git-dir <store> config gc.auto 1000` to match, where `driftr status` shows the store.

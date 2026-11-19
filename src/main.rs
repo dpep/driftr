@@ -73,7 +73,10 @@ enum Command {
     Diff { id: String, path: Option<String> },
     /// Restore a path from a snapshot (what it overwrites is snapshotted first)
     Restore {
+        /// File or directory, relative to the current directory. A directory is restored
+        /// whole: in-scope files added since the snapshot are removed
         path: String,
+        /// Snapshot to restore from: an id from `driftr log`, or `@~N`
         #[arg(long)]
         at: String,
         /// Print the diff the restore would apply, and change nothing
@@ -227,12 +230,19 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
                 let diff = repo.preview_restore(&at, &path)?;
                 fmt.one(&json!({ "diff": diff }), |_| Some(diff.clone()))?;
             } else {
+                let before = repo.last()?;
                 let safety = repo.restore(&at, &path)?;
-                if let Some(s) = &safety {
-                    eprintln!("previous state saved as {s}");
-                }
-                let value = json!({ "restored": path, "from": at, "safety": safety });
-                fmt.one(&value, |_| None)?;
+                // Unchanged since the last snapshot means that snapshot already holds it.
+                let undo = safety.clone().or(before).map(|id| id[..7].to_string());
+                let value = json!({ "restored": path, "from": at, "safety": safety, "undo": undo });
+                fmt.one(&value, |_| {
+                    Some(match &undo {
+                        Some(id) => format!(
+                            "restored {path} from {at}; undo with: driftr restore --at {id} {path}"
+                        ),
+                        None => format!("restored {path} from {at}"),
+                    })
+                })?;
             }
         }
         Command::Watch { idle, max } => {

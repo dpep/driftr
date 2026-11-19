@@ -446,13 +446,30 @@ impl Repo {
     }
 
     /// Restores `path` from snapshot `id`, first snapshotting what it overwrites.
-    /// Returns that safety snapshot, if the working tree had unsaved changes.
+    /// In-scope files added since the snapshot are removed, as the dry run shows, and the
+    /// result is snapshotted. Returns the safety snapshot, if the working tree had unsaved
+    /// changes.
     pub fn restore(&self, id: &str, path: &str) -> Result<Option<String>> {
+        let _lock = self.lock()?;
         let commit = self.resolve_path(id, path)?;
 
         let safety = self.snapshot(&SnapshotOpts {
             message: Some(format!("Before restoring {path} from {id}")),
             trailers: vec![],
+        })?;
+        // `git restore` only removes files git tracks, and in-scope files usually aren't.
+        let added = self.healing(|| {
+            let tree = self.stage_once()?;
+            self.git.run(&[
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "--diff-filter=D",
+                &tree,
+                &commit,
+                "--",
+                path,
+            ])
         })?;
         // --worktree only: the user's index stays as it was.
         self.git.run(&[
@@ -462,10 +479,21 @@ impl Repo {
             "--",
             path,
         ])?;
+        for p in added.lines() {
+            let file = self.top.join(p);
+            if file.exists() {
+                fs::remove_file(&file).with_context(|| format!("removing {p}"))?;
+            }
+        }
+        // So `@` is the restored state, not the one just left.
+        self.snapshot(&SnapshotOpts {
+            message: Some(format!("Restore {path} from {}", &commit[..7])),
+            trailers: vec![],
+        })?;
         Ok(safety)
     }
 
-    /// The diff `restore` would apply, without applying it.
+    /// The diff `restore` would apply, without applying it; `restore` must match it.
     pub fn preview_restore(&self, id: &str, path: &str) -> Result<String> {
         let commit = self.resolve_path(id, path)?;
         self.healing(|| {

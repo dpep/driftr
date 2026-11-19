@@ -212,6 +212,41 @@ fn restore_recovers_a_deleted_file() {
 }
 
 #[test]
+fn restoring_a_directory_matches_its_dry_run() {
+    let (tmp, repo) = repo();
+    write(tmp.path(), "notes/a.md", "a1\n");
+    write(tmp.path(), "notes/b.md", "b1\n");
+    let v1 = snap(&repo).unwrap();
+    write(tmp.path(), "notes/a.md", "a2\n");
+    fs::remove_file(tmp.path().join("notes/b.md")).unwrap();
+    write(tmp.path(), "notes/c.md", "c1\n");
+    write(tmp.path(), "notes/keep.txt", "out of scope\n");
+    snap(&repo).unwrap();
+
+    let preview = repo.preview_restore(&v1, "notes").unwrap();
+    assert!(preview.contains("deleted file mode"), "{preview}");
+    repo.restore(&v1, "notes").unwrap();
+    assert_eq!(read(tmp.path(), "notes/a.md"), "a1\n");
+    assert_eq!(read(tmp.path(), "notes/b.md"), "b1\n");
+    assert!(
+        !tmp.path().join("notes/c.md").exists(),
+        "added since the snapshot, so the restore removes it, as the dry run said"
+    );
+    assert!(
+        tmp.path().join("notes/keep.txt").exists(),
+        "out of scope, so never snapshotted and never deleted"
+    );
+    assert_eq!(repo.preview_restore(&v1, "notes").unwrap(), "");
+    let latest = repo.log(None, None).unwrap().pop().unwrap();
+    assert_eq!(latest.subject, format!("Restore notes from {}", &v1[..7]));
+    assert_eq!(
+        repo.preview_restore("@", "notes").unwrap(),
+        "",
+        "@ is the restored state"
+    );
+}
+
+#[test]
 fn restore_rejects_a_path_missing_from_the_snapshot() {
     let (tmp, repo) = repo();
     write(tmp.path(), "a.md", "1\n");
