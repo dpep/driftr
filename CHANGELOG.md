@@ -4,6 +4,7 @@
 
 - `driftr log` lists oldest first, so the newest snapshot is last, next to your prompt. Scripts reading `log -j` should take the last row for the latest.
 - `.trash` directories are excluded by default. Existing configs keep their own `exclude` list: add `"**/.trash/**"` to it to match.
+- Driftr-owned stores pack themselves: after a snapshot, git packs the store in the background once 1000 loose objects pile up. Stores created earlier use git's default of 6700; run `git --git-dir <store> config gc.auto 1000` to match, where `driftr status` shows the store.
 - Initial spike: `snapshot`, `log`, `diff`, `restore` and `watch`. Snapshots live on `refs/driftr/snapshots`, built through a private index, so your branch, HEAD and staged changes are never touched.
 - Scope: Markdown by default, configurable with globs and `re:` regexes; `driftr track` adds a path, `driftr files` lists what's in scope.
 - `driftr hook` for Claude Code: snapshots at turn boundaries tagged with the session, in repos opted in with `driftr init`.

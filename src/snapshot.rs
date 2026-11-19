@@ -380,12 +380,22 @@ impl Repo {
             &id,
             &old,
         ])?;
+        if self.external {
+            self.compact();
+        }
         Ok(Some(id))
     }
 
     pub fn last(&self) -> Result<Option<String>> {
         self.git
             .try_run(&["rev-parse", "--verify", "-q", &self.snapshot_ref])
+    }
+
+    /// Lets git pack loose objects once there are enough, in the background (`gc.autoDetach`),
+    /// so a snapshot never waits on it. Driftr-owned stores only: the user's repo is git's to
+    /// maintain. Best effort, so a failure never fails the snapshot that triggered it.
+    fn compact(&self) {
+        let _ = self.git.run(&["gc", "--auto", "--quiet"]);
     }
 
     /// Snapshots oldest first, so the newest lands next to the prompt; optionally limited to a

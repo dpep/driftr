@@ -12,6 +12,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::git::Git;
 
+/// Loose objects before a snapshot asks git to pack the store.
+pub const GC_AUTO: &str = "1000";
+
 /// `$DRIFTR_HOME`, else `$XDG_DATA_HOME/driftr`, else `~/.local/share/driftr`.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(dir) = env::var_os("DRIFTR_HOME").filter(|v| !v.is_empty()) {
@@ -97,5 +100,8 @@ pub fn create(dir: &Path) -> Result<PathBuf> {
     let config = Git::new(&dir).with_repo(&store, &dir);
     config.run(&["config", "core.bare", "false"])?;
     config.run(&["config", "core.worktree", &dir.to_string_lossy()])?;
+    // Snapshots add a handful of objects each, so git's default (6700 loose) would leave a
+    // store unpacked for months; this packs it every few hundred snapshots.
+    config.run(&["config", "gc.auto", GC_AUTO])?;
     Ok(store)
 }

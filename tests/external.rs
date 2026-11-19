@@ -200,3 +200,40 @@ fn gc_purges_untracked_content_from_an_external_store() {
     assert!(!gone.success(), "blob still in the store");
     assert_eq!(env.run(&env.work, &["log"]).stdout.lines().count(), 1);
 }
+
+#[test]
+fn snapshots_pack_the_store_once_loose_objects_pile_up() {
+    let env = Env::new();
+    assert_eq!(env.run(&env.work, &["init"]).code, 0);
+    let store = env
+        .data
+        .join("dirs")
+        .join(format!("{}.git", driftr::external::escape(&env.work)));
+    let store_git = |args: &[&str]| {
+        let mut full = vec!["--git-dir", store.to_str().unwrap()];
+        full.extend(args);
+        git(&env.work, &full)
+    };
+    assert_eq!(store_git(&["config", "gc.auto"]), driftr::external::GC_AUTO);
+
+    // Fixed contents, so the same objects (two or more in objects/17, git's sample) every run.
+    let blobs = env.home.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    let paths: Vec<String> = (0..2000)
+        .map(|i| {
+            let p = blobs.join(i.to_string());
+            fs::write(&p, format!("blob {i}\n")).unwrap();
+            p.to_string_lossy().into_owned()
+        })
+        .collect();
+    let mut args = vec!["hash-object", "-w", "--no-filters"];
+    args.extend(paths.iter().map(String::as_str));
+    store_git(&args);
+    store_git(&["config", "gc.auto", "1"]);
+    store_git(&["config", "gc.autoDetach", "false"]); // run synchronously, so the test can look
+
+    write(&env.work, "plan.md", "v2\n");
+    assert_eq!(env.run(&env.work, &["snapshot"]).code, 0);
+    let counts = store_git(&["count-objects", "-v"]);
+    assert!(counts.contains("packs: 1"), "{counts}");
+}
