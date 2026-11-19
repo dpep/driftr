@@ -1,10 +1,12 @@
 # Driftr
 
+> The original plan, written before any code. It is kept for history and does not describe current behavior: several commands it proposes don't exist. See [README.md](../README.md) for what driftr does and [decisions.md](decisions.md) for what was settled and why.
+
 ## Project Plan: Automatic Versioning and Change Management for AI-Assisted Development
 
 **Project name:** Driftr
 **CLI binary:** `driftr`
-**Package:** `driftr` (crates.io availability confirmed by project owner)
+**Package:** `driftr`
 **Language:** Rust
 **Status:** Exploration and initial technical planning
 

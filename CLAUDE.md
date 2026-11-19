@@ -1,6 +1,6 @@
 # driftr
 
-Automatic working history for AI-assisted development, kept in plain git. See README.md for usage, docs/DESIGN.md for the plan, docs/decisions.md for settled choices and why.
+Automatic working history for AI-assisted development, kept in plain git. See README.md for usage, docs/decisions.md for settled choices and why, docs/DESIGN.md for the original (historical) plan.
 
 ## First principles
 

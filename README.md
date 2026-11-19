@@ -2,12 +2,33 @@
 
 Automatic, recoverable working history for AI-assisted development — stored in plain git, without touching your branch, HEAD, or staging area.
 
-Status: spike. See [docs/DESIGN.md](docs/DESIGN.md) for the plan and [docs/decisions.md](docs/decisions.md) for what the spike settled.
+An agent can rewrite a file several times between your commits, and the version you wanted back is usually one of the ones in between. driftr snapshots the files you care about at every turn and every edit, so any intermediate state is a `driftr restore` away. Snapshots are ordinary git commits on a ref of their own, so your branch and staging area never see them.
+
+Status: early (0.x). Commands and config may still change. Snapshots are plain git commits either way, so your history stays readable with git.
+
+## Install
+
+```
+brew install dpep/tools/driftr
+cargo install driftr
+```
+
+Requires git 2.31 or newer on `PATH`. macOS and Linux.
+
+## Quick start
+
+```
+driftr init                      # in a repo, or any directory
+# add the hooks under "Claude Code" below to ~/.claude/settings.json, then work as usual
+driftr log                       # what was captured, newest last
+driftr diff @~1 notes/plan.md    # how plan.md differs from its previous version
+driftr restore notes/plan.md --at @~1
+```
 
 ## Usage
 
 ```
-driftr init                               # opt this repo (or plain directory) in
+driftr init                               # opt in to hooks and the sweep; outside git, required
 driftr track <path>...                    # add files or directories to the scope
 driftr untrack <path|pattern>...          # drop a matching include, else exclude the path
 driftr files                              # what's in scope right now
@@ -84,8 +105,6 @@ Hooks are cheap when nothing changed, which is most of the time. driftr finds th
 
 Each event is appended to `<git dir>/driftr/events.jsonl`, and every hook run, with its timings and outcome, to `~/.local/share/driftr/hooks.jsonl` (capped). `driftr report` summarizes it per event and tool: runs, how many caught a change, how many the fast path settled, busy skips, errors, and p50/p95 latency.
 
-## Build
+## Development
 
-```
-cargo build --release
-```
+`cargo test`, `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are the gate CI runs. [docs/decisions.md](docs/decisions.md) records why things work the way they do; [docs/DESIGN.md](docs/DESIGN.md) is the original plan, kept for history.
