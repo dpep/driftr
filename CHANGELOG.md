@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Snapshot subjects say what happened: "Add", "Delete" or "Stop tracking" (a file that left the scope but is still on disk) when every change agrees, else "Update". Several files in one directory read "Add 5 files in notes/old/" or "Update a.md, b.md in notes/old/" instead of repeating long paths. Existing subjects are unchanged.
 - `driftr show <id> <path>` prints a file as it was, without finding the store for `git show`. `driftr show @~1 plan.md` is the previous version.
 - Given a path, `@` and `@~N` count that path's own versions, so `driftr diff @~1 plan.md` is the previous version of `plan.md` even when other files were snapshotted since. Without a path they still count every snapshot.
 - `driftr restore` of a directory now removes in-scope files added since the snapshot, matching what `--dry-run` showed (it used to leave them). It snapshots the restored result, so `@` is no longer the state you just left, and prints the id to undo with.

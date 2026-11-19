@@ -152,7 +152,42 @@ fn describes_changes_deterministically() {
         [
             "Start tracking 1 file",
             "Delete README.md",
-            "Update a.md, b.md, c.md (+1 more)",
+            "Add a.md, b.md, c.md (+1 more)",
+        ]
+    );
+}
+
+#[test]
+fn subjects_name_the_shared_directory_and_the_real_change() {
+    let (tmp, repo) = repo();
+    snap(&repo).unwrap();
+    for name in ["a", "b", "c", "d", "e"] {
+        write(tmp.path(), &format!("notes/old/{name}.md"), "x\n");
+    }
+    snap(&repo).unwrap();
+    write(tmp.path(), "notes/old/a.md", "y\n");
+    write(tmp.path(), "notes/old/b.md", "y\n");
+    snap(&repo).unwrap();
+    repo.untrack("notes/old/c.md").unwrap();
+    snap(&repo).unwrap();
+    fs::remove_file(tmp.path().join("notes/old/d.md")).unwrap();
+    fs::remove_file(tmp.path().join("notes/old/e.md")).unwrap();
+    snap(&repo).unwrap();
+
+    let subjects: Vec<String> = repo
+        .log(None, None)
+        .unwrap()
+        .into_iter()
+        .skip(1)
+        .map(|e| e.subject)
+        .collect();
+    assert_eq!(
+        subjects,
+        [
+            "Add 5 files in notes/old/",
+            "Update a.md, b.md in notes/old/",
+            "Stop tracking notes/old/c.md",
+            "Delete d.md, e.md in notes/old/",
         ]
     );
 }
@@ -350,7 +385,7 @@ fn files_leaving_scope_drop_out_of_the_next_snapshot() {
     assert_eq!(tree_files(tmp.path(), &id), ["README.md"]);
     assert_eq!(
         git(tmp.path(), &["log", "-1", "--format=%s", &id]),
-        "Delete draft.md"
+        "Stop tracking draft.md"
     );
 }
 

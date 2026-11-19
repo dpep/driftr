@@ -97,6 +97,5 @@ To keep tests off real repos, the CLI reads the registry and passes it to the ho
 - Gitignored files can't be tracked, even explicitly. Fine for now; `track --force` if a real need shows up.
 - Snapshot ref growth and pruning policy are unmeasured.
 - Judge the sweep with `driftr report`'s `swept` column: if it rarely catches what the targeted hooks missed, pull it.
-- Multi-file subjects always say "Update", even when most files were added (e.g. newly in scope).
 - `gc` keeps subjects verbatim, so generated ones that count files go stale ("Start tracking 342 files" now holds 96). Regenerating generated subjects needs a marker for which ones were explicit.
 - Finding why a file is in scope (or what's bloating it) took manual surveying; `files --why` and a size/churn view would have surfaced `skills/synced` and `bin/` immediately.

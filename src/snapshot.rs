@@ -591,19 +591,29 @@ impl Repo {
                 if n == 1 { "" } else { "s" }
             ));
         }
-        Ok(match changes.as_slice() {
-            [(status, path)] => {
-                let verb = match *status {
-                    "A" => "Add",
-                    "D" => "Delete",
-                    _ => "Update",
-                };
-                format!("{verb} {path}")
+        // A path gone from the snapshot but still on disk left the scope; it wasn't deleted.
+        let verb_of = |status: &str, path: &str| match status {
+            "A" => "Add",
+            "D" if self.top.join(path).exists() => "Stop tracking",
+            "D" => "Delete",
+            _ => "Update",
+        };
+        let verbs: BTreeSet<&str> = changes.iter().map(|(s, p)| verb_of(s, p)).collect();
+        let verb = match verbs.iter().collect::<Vec<_>>()[..] {
+            [only] => *only,
+            _ => "Update",
+        };
+        let paths: Vec<&str> = changes.iter().map(|(_, p)| *p).collect();
+        Ok(match (paths.as_slice(), common_dir(&paths)) {
+            ([path], _) => format!("{verb} {path}"),
+            (_, Some(dir)) if paths.len() > 3 => format!("{verb} {} files in {dir}/", paths.len()),
+            (_, Some(dir)) => {
+                let names: Vec<&str> = paths.iter().map(|p| &p[dir.len() + 1..]).collect();
+                format!("{verb} {} in {dir}/", names.join(", "))
             }
-            _ => {
-                let shown: Vec<&str> = changes.iter().take(3).map(|(_, p)| *p).collect();
-                let more = changes.len().saturating_sub(shown.len());
-                let mut s = format!("Update {}", shown.join(", "));
+            (_, None) => {
+                let more = paths.len().saturating_sub(3);
+                let mut s = format!("{verb} {}", paths[..paths.len().min(3)].join(", "));
                 if more > 0 {
                     s.push_str(&format!(" (+{more} more)"));
                 }
@@ -611,6 +621,16 @@ impl Repo {
             }
         })
     }
+}
+
+/// The deepest directory holding every path, if they share one.
+fn common_dir<'a>(paths: &[&'a str]) -> Option<&'a str> {
+    let first = paths.first()?;
+    let mut dir = first.rsplit_once('/')?.0;
+    while !paths.iter().all(|p| p.starts_with(&format!("{dir}/"))) {
+        dir = dir.rsplit_once('/')?.0;
+    }
+    Some(dir)
 }
 
 /// Appends one line to a repo's event log (`<common dir>/driftr/events.jsonl`).
