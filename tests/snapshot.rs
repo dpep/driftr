@@ -150,9 +150,9 @@ fn describes_changes_deterministically() {
     assert_eq!(
         subjects,
         [
-            "Update a.md, b.md, c.md (+1 more)",
+            "Start tracking 1 file",
             "Delete README.md",
-            "Start tracking 1 file"
+            "Update a.md, b.md, c.md (+1 more)",
         ]
     );
 }
@@ -522,7 +522,7 @@ fn gc_rewrites_history_to_the_current_scope() {
     assert!(!report.pruned, "never prune-now in the user's own repo");
     let after = repo.log(None, None).unwrap();
     let subjects: Vec<&str> = after.iter().map(|e| e.subject.as_str()).collect();
-    assert_eq!(subjects, ["Update README.md", "Start tracking 3 files"]);
+    assert_eq!(subjects, ["Start tracking 3 files", "Update README.md"]);
     assert_eq!(after[0].time, before[0].time);
 
     let tip = repo.last().unwrap().unwrap();

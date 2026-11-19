@@ -62,7 +62,7 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
-    /// List snapshots, newest first
+    /// List snapshots, oldest first (newest last)
     Log {
         path: Option<String>,
         /// Only snapshots tagged with this session

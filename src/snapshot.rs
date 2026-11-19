@@ -388,7 +388,8 @@ impl Repo {
             .try_run(&["rev-parse", "--verify", "-q", &self.snapshot_ref])
     }
 
-    /// Snapshots newest first, optionally limited to a path and/or session.
+    /// Snapshots oldest first, so the newest lands next to the prompt; optionally limited to a
+    /// path and/or session.
     pub fn log(&self, path: Option<&str>, session: Option<&str>) -> Result<Vec<Entry>> {
         if self.last()?.is_none() {
             return Ok(vec![]);
@@ -396,6 +397,7 @@ impl Repo {
         let grep = session.map(|s| format!("--grep=^Driftr-Session: {s}$"));
         let mut args = vec![
             "log",
+            "--reverse",
             "--format=%h%x09%cd%x09%s",
             "--date=format-local:%Y-%m-%d %H:%M:%S",
         ];

@@ -47,7 +47,7 @@ fn log_renders_json_and_ndjson_rows() {
     let rows: Vec<Value> =
         serde_json::from_str(&driftr(tmp.path(), &["log", "-j"]).stdout).unwrap();
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["subject"], "Add a.md");
+    assert_eq!(rows[1]["subject"], "Add a.md", "newest last");
 
     let ndjson = driftr(tmp.path(), &["log", "-J", "--session", "s1"]).stdout;
     let lines: Vec<Value> = ndjson
@@ -55,7 +55,7 @@ fn log_renders_json_and_ndjson_rows() {
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["id"], rows[0]["id"]);
+    assert_eq!(lines[0]["id"], rows[1]["id"]);
 }
 
 #[test]

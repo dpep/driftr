@@ -14,7 +14,7 @@ driftr files                              # what's in scope right now
 driftr status                             # scope, snapshot count, whether the hook is wired up
 
 driftr snapshot [-m msg] [--session id]   # prints the snapshot id, or nothing if unchanged
-driftr log [path] [--session id]          # snapshots, newest first
+driftr log [path] [--session id]          # snapshots, newest last
 driftr diff <id> [path]                   # snapshot vs. the current in-scope files
 driftr restore <path> --at <id> [--dry-run]   # snapshots what it overwrites first
 driftr watch [--idle 30] [--max 300]      # poll; snapshot when the tree settles
