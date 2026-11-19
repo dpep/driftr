@@ -47,6 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.89
+      # The version as an input, not the ref: Dependabot bumps refs, which
+      # would quietly turn this into a newest-Rust check.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets --locked
