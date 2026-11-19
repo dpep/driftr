@@ -96,6 +96,17 @@ enum Command {
         dry_run: bool,
     },
     /// Summarize what each hook costs and catches, from the hook usage log
+    ///
+    /// One row per hook event and tool, busiest first. Columns:
+    ///
+    ///   runs    hook invocations
+    ///   caught  runs that took at least one snapshot
+    ///   swept   runs where the end-of-turn sweep caught a change the targeted hooks missed
+    ///   fast    runs settled by the stat fingerprint alone, without running git
+    ///   busy    runs that skipped a repo another driftr held; the next hook catches up
+    ///   errors  runs that hit an error (the hook still never fails the tool call)
+    ///   p50 ms  median run time; p95 ms, the slowest 5%
+    #[command(verbatim_doc_comment)]
     Report {
         /// Only runs from the last N hours
         #[arg(long)]
