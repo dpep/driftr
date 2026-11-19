@@ -35,12 +35,12 @@ git show <id>:path/to/file.md
 
 ## Scope
 
-By default driftr snapshots Markdown (`**/*.md`) and skips `node_modules`. Gitignored files are never included. The config lives at `.git/driftr/config.toml`, local to your clone and shared by its worktrees:
+By default driftr snapshots Markdown (`**/*.md`) and skips `node_modules` and `.trash`. Gitignored files are never included. The config lives at `.git/driftr/config.toml`, local to your clone and shared by its worktrees:
 
 ```toml
 [scope]
 include = ["**/*.md", "notes.txt", "re:^skills/.*\\.toml$"]
-exclude = ["**/node_modules/**"]
+exclude = ["**/node_modules/**", "**/.trash/**"]
 ```
 
 Patterns match repo-relative paths. Globs are gitignore-like (`*` stays within a directory, `**` crosses them); a `re:` prefix makes a regex. `driftr track` appends to `include`; `driftr untrack` removes a matching include or adds an exclude. To replace the default with an allowlist:

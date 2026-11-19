@@ -25,7 +25,7 @@ impl Default for Scope {
     fn default() -> Scope {
         Scope {
             include: vec!["**/*.md".into()],
-            exclude: vec!["**/node_modules/**".into()],
+            exclude: vec!["**/node_modules/**".into(), "**/.trash/**".into()],
         }
     }
 }
@@ -151,12 +151,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_cover_markdown_anywhere_but_node_modules() {
+    fn defaults_cover_markdown_anywhere_but_node_modules_and_trash() {
         let m = Matcher::new(&Scope::default()).unwrap();
         assert!(m.matches("README.md"));
         assert!(m.matches("docs/deep/plan.md"));
         assert!(!m.matches("src/main.rs"));
         assert!(!m.matches("node_modules/pkg/README.md"));
+        assert!(!m.matches("skills/.trash/old/SKILL.md"));
+        assert!(m.prunes_dir(".trash"));
     }
 
     #[test]
