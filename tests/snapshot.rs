@@ -255,6 +255,7 @@ fn restoring_a_directory_matches_its_dry_run() {
     write(tmp.path(), "notes/a.md", "a2\n");
     fs::remove_file(tmp.path().join("notes/b.md")).unwrap();
     write(tmp.path(), "notes/c.md", "c1\n");
+    write(tmp.path(), "notes/new/deep/n.md", "n\n");
     write(tmp.path(), "notes/keep.txt", "out of scope\n");
     snap(&repo).unwrap();
 
@@ -266,6 +267,10 @@ fn restoring_a_directory_matches_its_dry_run() {
     assert!(
         !tmp.path().join("notes/c.md").exists(),
         "added since the snapshot, so the restore removes it, as the dry run said"
+    );
+    assert!(
+        !tmp.path().join("notes/new").exists(),
+        "directories emptied by the restore go too"
     );
     assert!(
         tmp.path().join("notes/keep.txt").exists(),
@@ -299,6 +304,20 @@ fn at_n_counts_versions_of_the_path_when_one_is_given() {
 
     repo.restore("@~1", "a.md").unwrap();
     assert_eq!(read(tmp.path(), "a.md"), "v1\n");
+}
+
+#[test]
+fn restore_from_a_subdirectory_names_the_repo_path() {
+    let (tmp, _) = repo();
+    write(tmp.path(), "notes/a.md", "a1\n");
+    let repo = Repo::open(&tmp.path().join("notes")).unwrap();
+    let v1 = snap(&repo).unwrap();
+    write(tmp.path(), "notes/a.md", "a2\n");
+
+    repo.restore(&v1, ".").unwrap();
+    assert_eq!(read(tmp.path(), "notes/a.md"), "a1\n");
+    let latest = repo.log(None, None).unwrap().pop().unwrap();
+    assert_eq!(latest.subject, format!("Restore notes from {}", &v1[..7]));
 }
 
 #[test]

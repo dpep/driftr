@@ -493,10 +493,18 @@ impl Repo {
             if file.exists() {
                 fs::remove_file(&file).with_context(|| format!("removing {p}"))?;
             }
+            // remove_dir only succeeds on an empty directory, so this stops at the first
+            // one still holding anything.
+            for dir in file.ancestors().skip(1) {
+                if dir == self.top || fs::remove_dir(dir).is_err() {
+                    break;
+                }
+            }
         }
         // So `@` is the restored state, not the one just left.
+        let shown = self.repo_path(path)?;
         self.snapshot(&SnapshotOpts {
-            message: Some(format!("Restore {path} from {}", &commit[..7])),
+            message: Some(format!("Restore {shown} from {}", &commit[..7])),
             trailers: vec![],
         })?;
         Ok(safety)
@@ -514,6 +522,26 @@ impl Repo {
     /// Drops the private index, e.g. after a prune; the next stage rebuilds it.
     pub(crate) fn forget_index(&self) {
         let _ = fs::remove_file(&self.index);
+    }
+
+    /// `path` (relative to the cwd) as a repo-relative path, for messages.
+    fn repo_path(&self, path: &str) -> Result<String> {
+        let prefix = self.git.run(&["rev-parse", "--show-prefix"])?;
+        let mut parts: Vec<&str> = vec![];
+        for part in prefix.split('/').chain(path.split('/')) {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                p => parts.push(p),
+            }
+        }
+        Ok(if parts.is_empty() {
+            ".".into()
+        } else {
+            parts.join("/")
+        })
     }
 
     /// Resolves `id`, requiring `path` (relative to the cwd) to exist in it.
