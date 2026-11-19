@@ -20,6 +20,7 @@ Requires git 2.31 or newer on `PATH`. macOS and Linux.
 ```
 driftr init                      # in a repo, or any directory
 # add the hooks under "Claude Code" below to ~/.claude/settings.json, then work as usual
+driftr snapshot                  # or snapshot by hand (or run `driftr watch`) without Claude Code
 driftr log                       # what was captured, newest last
 driftr diff @~1 notes/plan.md    # how plan.md differs from its previous version
 driftr restore notes/plan.md --at @~1

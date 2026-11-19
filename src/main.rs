@@ -262,7 +262,7 @@ fn run(command: Command, fmt: Format) -> Result<ExitCode> {
                 fmt.one(&value, |_| {
                     Some(match &undo {
                         Some(id) => format!(
-                            "restored {path} from {at}; undo with: driftr restore --at {id} {path}"
+                            "restored {path} from {at}; undo with: driftr restore {path} --at {id}"
                         ),
                         None => format!("restored {path} from {at}"),
                     })

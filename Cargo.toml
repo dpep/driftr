@@ -8,7 +8,7 @@ repository = "https://github.com/dpep/driftr"
 rust-version = "1.89"
 keywords = ["git", "snapshot", "history", "claude-code", "ai"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".github/", "CLAUDE.md", "docs/", "tests/"]
+exclude = [".github/", ".gitignore", "CLAUDE.md", "docs/", "tests/"]
 
 [dependencies]
 anyhow = "1"
